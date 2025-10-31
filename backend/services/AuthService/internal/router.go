@@ -6,6 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/KnuffelGame/KnuffelGame/backend/libs/healthcheck"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/AuthService/internal/handlers"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/AuthService/internal/jwt"
 )
@@ -14,6 +15,9 @@ import (
 func New(gen *jwt.Generator) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
+
+	// Healthcheck
+	healthcheck.Mount(r)
 
 	// Routes
 	// POST /internal/create -> create guest user token
