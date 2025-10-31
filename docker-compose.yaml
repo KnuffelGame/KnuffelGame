@@ -28,7 +28,8 @@ services:
     image: ghcr.io/knuffelgame/authservice:latest
     pull_policy: build
     build:
-      context: backend/services/AuthService
+      context: backend
+      dockerfile: services/AuthService/Dockerfile
     ports:
       - 8081:8081
 

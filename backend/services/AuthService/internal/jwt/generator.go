@@ -5,7 +5,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/KnuffelGame/KnuffelGame/backend/libs/logger"
 	jwtlib "github.com/golang-jwt/jwt/v5"
+	"log/slog"
 )
 
 // Generator creates signed JWT tokens for guest users.
@@ -27,12 +29,16 @@ func NewGenerator(secret string) *Generator {
 	if secret == "" {
 		secret = os.Getenv("JWT_SECRET")
 	}
+	if secret == "" {
+		logger.Default().Warn("jwt secret not configured during generator initialization")
+	}
 	return &Generator{secret: []byte(secret), issuer: "knuffel-auth-service"}
 }
 
 // CreateToken returns a signed JWT string or error if secret missing or signing fails.
 func (g *Generator) CreateToken(userID, username string) (string, error) {
 	if len(g.secret) == 0 {
+		logger.Default().Error("token generation failed: secret missing", slog.String("user_id", userID))
 		return "", errors.New("jwt secret not configured")
 	}
 	issuedAt := time.Now()
@@ -49,7 +55,9 @@ func (g *Generator) CreateToken(userID, username string) (string, error) {
 	token := jwtlib.NewWithClaims(jwtlib.SigningMethodHS256, claims)
 	signed, err := token.SignedString(g.secret)
 	if err != nil {
+		logger.Default().Error("token signing failed", slog.String("user_id", userID), slog.String("error", err.Error()))
 		return "", err
 	}
+	logger.Default().Debug("token created", slog.String("user_id", userID), slog.String("username", username))
 	return signed, nil
 }

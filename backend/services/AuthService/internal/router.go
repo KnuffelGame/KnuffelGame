@@ -3,18 +3,19 @@ package router
 import (
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
-
 	"github.com/KnuffelGame/KnuffelGame/backend/libs/healthcheck"
+	"github.com/KnuffelGame/KnuffelGame/backend/libs/logger"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/AuthService/internal/handlers"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/AuthService/internal/jwt"
+	"github.com/go-chi/chi/v5"
 )
 
-// New constructs the HTTP router using the provided JWT generator.
+// New constructs the HTTP router using the provided JWT generator and attaches logging middleware.
 func New(gen *jwt.Generator) http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.Logger)
+	// replace chi default logger with structured slog based middleware
+	l := logger.Default()
+	r.Use(logger.ChiMiddleware(l))
 
 	// Healthcheck
 	healthcheck.Mount(r)
