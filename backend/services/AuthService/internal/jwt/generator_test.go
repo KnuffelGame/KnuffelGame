@@ -52,4 +52,7 @@ func TestCreateToken(t *testing.T) {
 	if int64(_exp)-int64(_iat) != int64(24*time.Hour/time.Second) {
 		t.Errorf("expected exp-iat == 86400, got %d", int64(_exp)-int64(_iat))
 	}
+	if claims["guest"] != true {
+		t.Errorf("expected guest true, got %v", claims["guest"])
+	}
 }

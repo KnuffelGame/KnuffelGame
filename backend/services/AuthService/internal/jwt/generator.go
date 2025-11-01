@@ -45,11 +45,12 @@ func (g *Generator) CreateToken(userID, username string) (string, error) {
 	expiresAt := issuedAt.Add(24 * time.Hour)
 
 	claims := jwtlib.MapClaims{
-		"sub":  userID,
-		"name": username,
-		"iat":  issuedAt.Unix(),
-		"exp":  expiresAt.Unix(),
-		"iss":  g.issuer,
+		"sub":   userID,
+		"name":  username,
+		"iat":   issuedAt.Unix(),
+		"exp":   expiresAt.Unix(),
+		"iss":   g.issuer,
+		"guest": true,
 	}
 
 	token := jwtlib.NewWithClaims(jwtlib.SigningMethodHS256, claims)

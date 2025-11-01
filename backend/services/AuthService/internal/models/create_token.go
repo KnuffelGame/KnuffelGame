@@ -22,3 +22,19 @@ type ErrorResponse struct {
 	Message string                 `json:"message"`
 	Details map[string]interface{} `json:"details,omitempty"`
 }
+
+type ValidateTokenRequest struct {
+	Token string `json:"token"`
+}
+
+type ValidateTokenSuccessResponse struct {
+	Valid    bool   `json:"valid"`
+	UserID   string `json:"user_id"`
+	Username string `json:"username"`
+	IsGuest  bool   `json:"is_guest"`
+}
+
+type ValidateTokenFailureResponse struct {
+	Valid bool   `json:"valid"`
+	Error string `json:"error"`
+}

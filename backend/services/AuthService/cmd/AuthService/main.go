@@ -20,11 +20,12 @@ func main() {
 
 	cfg := config.Load()
 	gen := jwt.NewGenerator(cfg.JWTSecret)
+	val := jwt.NewValidator(cfg.JWTSecret)
 	if cfg.JWTSecret == "" {
-		log.Warn("JWT_SECRET is empty; token generation will fail")
+		log.Warn("JWT_SECRET is empty; token generation & validation will fail")
 	}
 
-	r := router.New(gen)
+	r := router.New(gen, val)
 	log.Info("listening", slog.String("port", cfg.Port))
 	if err := http.ListenAndServe(":"+cfg.Port, r); err != nil {
 		log.Error("server exited", slog.String("error", err.Error()))
