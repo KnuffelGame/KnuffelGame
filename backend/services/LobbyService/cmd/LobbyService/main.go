@@ -8,6 +8,7 @@ import (
 	"github.com/KnuffelGame/KnuffelGame/backend/libs/logger"
 	router "github.com/KnuffelGame/KnuffelGame/backend/services/LobbyService/internal"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/LobbyService/internal/db"
+	"github.com/KnuffelGame/KnuffelGame/backend/services/LobbyService/internal/joincode"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/LobbyService/pkg/config"
 )
 
@@ -43,7 +44,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	r := router.New()
+	// Initialize join code generator
+	codeGen := joincode.NewGenerator(dbConn.DB)
+
+	r := router.New(dbConn.DB, codeGen)
 	log.Info("listening", slog.String("port", cfg.Port))
 	if err := http.ListenAndServe(":"+cfg.Port, r); err != nil {
 		log.Error("server exited", slog.String("error", err.Error()))
