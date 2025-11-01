@@ -10,8 +10,8 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// New constructs the HTTP router using the provided JWT generator and attaches logging middleware.
-func New(gen *jwt.Generator) http.Handler {
+// New constructs the HTTP router using the provided JWT generator and validator, and attaches logging middleware.
+func New(gen *jwt.Generator, val *jwt.Validator) http.Handler {
 	r := chi.NewRouter()
 	// replace chi default logger with structured slog based middleware
 	l := logger.Default()
@@ -21,8 +21,10 @@ func New(gen *jwt.Generator) http.Handler {
 	healthcheck.Mount(r)
 
 	// Routes
-	// POST /internal/create -> create guest user token
+	// POST /internal/create -> create (or guest) user token
 	r.Post("/internal/create", handlers.CreateTokenHandler(gen))
+	// POST /internal/validate -> validate token
+	r.Post("/internal/validate", handlers.ValidateTokenHandler(val))
 
 	return r
 }

@@ -4,9 +4,11 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 )
 
 var defaultLogger *slog.Logger
+var defaultOnce sync.Once
 
 // New constructs a new slog.Logger with the configured Options and sets it as the package default.
 // Subsequent calls update the default. Safe for concurrent read but create early in startup.
@@ -18,11 +20,13 @@ func New(opts ...Option) *slog.Logger {
 	return l
 }
 
-// Default returns the package global logger; if nil initializes with defaults.
+// Default returns the package global logger; initializes once with defaults if unset.
 func Default() *slog.Logger {
-	if defaultLogger == nil {
-		return New()
-	}
+	defaultOnce.Do(func() {
+		if defaultLogger == nil {
+			defaultLogger = New()
+		}
+	})
 	return defaultLogger
 }
 

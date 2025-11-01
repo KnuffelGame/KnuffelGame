@@ -2,50 +2,46 @@ package jwt
 
 import (
 	"errors"
-	"os"
-	"time"
-
 	"log/slog"
+	"os"
 
 	"github.com/KnuffelGame/KnuffelGame/backend/libs/logger"
 	jwtlib "github.com/golang-jwt/jwt/v5"
 )
 
-type Claims struct {
-	UserID    string
-	Username  string
-	Issuer    string
-	IssuedAt  time.Time
-	ExpiresAt time.Time
-	IsGuest   bool
-}
-
-type Validator struct {
-	secret []byte
-	issuer string
-}
-
 var (
 	ErrInvalidSignature = errors.New("invalid signature")
 	ErrTokenExpired     = errors.New("token expired")
 	ErrMalformedToken   = errors.New("invalid format")
+	ErrInvalidIssuer    = errors.New("invalid issuer")
+	ErrMissingClaims    = errors.New("missing claims")
 )
 
+type Validator struct {
+	secret []byte
+	issuer string
+	log    *slog.Logger
+}
+
+// NewValidator builds validator; warns on missing/weak secret.
 func NewValidator(secret string) *Validator {
 	if secret == "" {
 		secret = os.Getenv("JWT_SECRET")
 	}
+	l := logger.Default().WithGroup("jwt").With(slog.String("component", "validator"))
 	if secret == "" {
-		logger.Default().Warn("jwt secret not configured during validator initialization")
+		l.Warn("jwt secret not configured during validator initialization")
+	} else if len(secret) < minSecretLen {
+		l.Warn("jwt secret length below recommended minimum", slog.Int("length", len(secret)))
 	}
-	return &Validator{secret: []byte(secret), issuer: "knuffel-auth-service"}
+	return &Validator{secret: []byte(secret), issuer: Issuer, log: l}
 }
 
 func (v *Validator) ValidateToken(tokenString string) (*Claims, error) {
 	if tokenString == "" {
 		return nil, ErrMalformedToken
 	}
-	parsedToken, err := jwtlib.ParseWithClaims(tokenString, jwtlib.MapClaims{}, func(t *jwtlib.Token) (interface{}, error) {
+	parsedToken, err := jwtlib.ParseWithClaims(tokenString, &Claims{}, func(t *jwtlib.Token) (interface{}, error) {
 		if t.Method.Alg() != jwtlib.SigningMethodHS256.Alg() {
 			return nil, ErrInvalidSignature
 		}
@@ -60,33 +56,16 @@ func (v *Validator) ValidateToken(tokenString string) (*Claims, error) {
 		}
 		return nil, ErrMalformedToken
 	}
-	claimsMap, ok := parsedToken.Claims.(jwtlib.MapClaims)
+	claims, ok := parsedToken.Claims.(*Claims)
 	if !ok || !parsedToken.Valid {
 		return nil, ErrMalformedToken
 	}
-	issRaw, okIss := claimsMap["iss"].(string)
-	if !okIss || issRaw != v.issuer {
-		return nil, errors.New("invalid issuer")
+	if claims.Issuer != v.issuer {
+		return nil, ErrInvalidIssuer
 	}
-	subRaw, okSub := claimsMap["sub"].(string)
-	nameRaw, okName := claimsMap["name"].(string)
-	if !okSub || subRaw == "" || !okName || nameRaw == "" {
-		return nil, errors.New("missing claims")
+	if claims.Subject == "" || claims.Username == "" {
+		return nil, ErrMissingClaims
 	}
-	var issuedAt, expiresAt time.Time
-	if iatFloat, okIat := claimsMap["iat"].(float64); okIat {
-		issuedAt = time.Unix(int64(iatFloat), 0)
-	}
-	if expFloat, okExp := claimsMap["exp"].(float64); okExp {
-		expiresAt = time.Unix(int64(expFloat), 0)
-		if time.Now().After(expiresAt) {
-			return nil, ErrTokenExpired
-		}
-	}
-	isGuest := true
-	if guestRaw, okGuest := claimsMap["guest"].(bool); okGuest {
-		isGuest = guestRaw
-	}
-	logger.Default().Debug("token validated", slog.String("user_id", subRaw), slog.String("username", nameRaw))
-	return &Claims{UserID: subRaw, Username: nameRaw, Issuer: issRaw, IssuedAt: issuedAt, ExpiresAt: expiresAt, IsGuest: isGuest}, nil
+	v.log.Debug("token validated", slog.String("user_id", claims.Subject), slog.String("username", claims.Username))
+	return claims, nil
 }

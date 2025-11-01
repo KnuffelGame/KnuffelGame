@@ -22,12 +22,12 @@ func TestMount(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.Code)
 	}
-	if ct := resp.Header().Get("Content-Type"); ct != "text/plain; charset=utf-8" {
-		t.Fatalf("expected Content-Type text/plain; charset=utf-8, got %s", ct)
+	if ct := resp.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("expected Content-Type application/json, got %s", ct)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if string(body) != "1" {
-		t.Fatalf("expected body '1', got %q", string(body))
+	if string(body) != "{\"status\":\"ok\"}" {
+		t.Fatalf("expected body '{\"status\":\"ok\"}', got %q", string(body))
 	}
 }
 
@@ -42,11 +42,11 @@ func TestHandler(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.Code)
 	}
-	if ct := resp.Header().Get("Content-Type"); ct != "text/plain; charset=utf-8" {
-		t.Fatalf("expected Content-Type text/plain; charset=utf-8, got %s", ct)
+	if ct := resp.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("expected Content-Type application/json, got %s", ct)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if string(body) != "1" {
-		t.Fatalf("expected body '1', got %q", string(body))
+	if string(body) != "{\"status\":\"ok\"}" {
+		t.Fatalf("expected body '{\"status\":\"ok\"}', got %q", string(body))
 	}
 }
