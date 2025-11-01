@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/KnuffelGame/KnuffelGame/backend/libs/httpx"
 	"github.com/KnuffelGame/KnuffelGame/backend/libs/logger"
-	"github.com/KnuffelGame/KnuffelGame/backend/services/AuthService/internal/httpx"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/AuthService/internal/jwt"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/AuthService/internal/models"
 )
