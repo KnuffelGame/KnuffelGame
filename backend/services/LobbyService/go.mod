@@ -3,6 +3,7 @@ module github.com/KnuffelGame/KnuffelGame/backend/services/LobbyService
 go 1.25.3
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/KnuffelGame/KnuffelGame/backend/libs/healthcheck v0.0.0
 	github.com/KnuffelGame/KnuffelGame/backend/libs/logger v0.0.0
 	github.com/go-chi/chi/v5 v5.2.3
