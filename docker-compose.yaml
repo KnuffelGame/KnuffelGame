@@ -47,9 +47,15 @@ services:
     image: ghcr.io/knuffelgame/lobbyservice:latest
     pull_policy: build
     build:
-      context: backend/services/LobbyService
+      context: backend
+      dockerfile: services/LobbyService/Dockerfile
+    env_file:
+      - env.d/LobbyService.env
     ports:
       - 8083:8083
+    depends_on:
+      Postgres:
+        condition: service_healthy
 
   SSEService:
     image: ghcr.io/knuffelgame/sseservice:latest
