@@ -1,0 +1,1361 @@
+openapi: 3.0.3
+info:
+  title: Knuffel Game Service API
+  description: |
+    Game logic service for the Knuffel multiplayer Kniffel application.
+    
+    **Responsibilities:**
+    - Game logic (rolling, locking dice, field selection)
+    - Score calculation (including bonus, multiple Kniffel)
+    - Game state management (whose turn, dice values)
+    - Timeout mechanism (40s, resets on interaction)
+    - Game end detection
+    - Event publishing (→ SSE Service)
+    
+    **Technical Details:**
+    - Language: Go
+    - Database: PostgreSQL (game_db)
+    - Tables: games, scores
+    
+    **Game Rules (Kniffel/Yahtzee):**
+    - 5 dice (values 1-6)
+    - Up to 3 rolls per turn
+    - Can lock/unlock dice between rolls
+    - 13 fields to fill on scorecard
+    - Upper section bonus: +35 points if sum ≥ 63
+    - Multiple Kniffel: +50 bonus if Kniffel field already filled
+    
+    **Authentication:**
+    All endpoints (except /healthcheck and /internal/*) require authentication via JWT.
+    The API Gateway adds these headers after token validation:
+    - `X-User-ID`: User identifier from JWT
+    - `X-Username`: Username from JWT
+  version: 1.0.0
+  contact:
+    name: Knuffel Team
+
+servers:
+  - url: http://localhost:8082
+    description: GameService (port from docker-compose.yaml)
+
+tags:
+  - name: Game Actions
+    description: Player actions during game
+  - name: Game Info
+    description: Game state and information
+  - name: Internal
+    description: Internal endpoints
+
+paths:
+  /internal/create:
+    post:
+      tags:
+        - Internal
+      summary: Create new game
+      description: |
+        Creates a new game instance. Called by Lobby Service when game starts.
+        
+        **Actions:**
+        1. Create game record with turn order
+        2. Initialize score board (13 empty fields per player)
+        3. Set first player as current
+        4. Initialize dice state (all unlocked, not rolled yet)
+        5. Start timeout timer
+        
+        **Does NOT publish events** - Lobby Service handles game_started event.
+      operationId: createGame
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGameRequest'
+            examples:
+              newGame:
+                summary: Create game with 3 players
+                value:
+                  lobby_id: "lby_abc123"
+                  turn_order:
+                    - user_id: "usr_charlie789"
+                      username: "Charlie"
+                    - user_id: "usr_alice123"
+                      username: "Alice"
+                    - user_id: "usr_bob456"
+                      username: "Bob"
+      responses:
+        '201':
+          description: Game created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateGameResponse'
+              examples:
+                success:
+                  summary: Game created
+                  value:
+                    game_id: "gam_xyz789"
+                    lobby_id: "lby_abc123"
+                    current_player_id: "usr_charlie789"
+                    turn_order: ["usr_charlie789", "usr_alice123", "usr_bob456"]
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /games/{game_id}:
+    get:
+      tags:
+        - Game Info
+      summary: Get game state
+      description: |
+        Returns complete game state including:
+        - Current player
+        - Dice values and locks
+        - Roll count
+        - Full score board for all players
+        - Game status
+        
+        **Use cases:**
+        - Initial load when entering game
+        - Refresh after reconnect
+        - Verify game state
+      operationId: getGameState
+      parameters:
+        - $ref: '#/components/parameters/GameIdPath'
+        - $ref: '#/components/parameters/UserIdHeader'
+        - $ref: '#/components/parameters/UsernameHeader'
+      responses:
+        '200':
+          description: Game state retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameStateResponse'
+              examples:
+                activeGame:
+                  summary: Game in progress
+                  value:
+                    game_id: "gam_xyz789"
+                    lobby_id: "lby_abc123"
+                    status: "running"
+                    current_player_id: "usr_alice123"
+                    current_player_username: "Alice"
+                    roll_count: 1
+                    dice:
+                      - value: 3
+                        locked: false
+                      - value: 3
+                        locked: true
+                      - value: 5
+                        locked: false
+                      - value: 2
+                        locked: false
+                      - value: 3
+                        locked: true
+                    timeout_remaining_seconds: 35
+                    turn_order: ["usr_charlie789", "usr_alice123", "usr_bob456"]
+                    score_board:
+                      - user_id: "usr_charlie789"
+                        username: "Charlie"
+                        scores:
+                          ones: 3
+                          twos: null
+                          threes: null
+                          fours: null
+                          fives: null
+                          sixes: null
+                          upper_sum: 3
+                          bonus: null
+                          three_of_a_kind: null
+                          four_of_a_kind: null
+                          full_house: null
+                          small_straight: null
+                          large_straight: null
+                          kniffel: null
+                          chance: null
+                          lower_sum: 0
+                          total: 3
+                      - user_id: "usr_alice123"
+                        username: "Alice"
+                        scores:
+                          ones: null
+                          twos: null
+                          threes: null
+                          fours: null
+                          fives: null
+                          sixes: null
+                          upper_sum: 0
+                          bonus: null
+                          three_of_a_kind: null
+                          four_of_a_kind: null
+                          full_house: null
+                          small_straight: null
+                          large_straight: null
+                          kniffel: null
+                          chance: null
+                          lower_sum: 0
+                          total: 0
+                      - user_id: "usr_bob456"
+                        username: "Bob"
+                        scores:
+                          ones: null
+                          twos: null
+                          threes: null
+                          fours: null
+                          fives: null
+                          sixes: null
+                          upper_sum: 0
+                          bonus: null
+                          three_of_a_kind: null
+                          four_of_a_kind: null
+                          full_house: null
+                          small_straight: null
+                          large_straight: null
+                          kniffel: null
+                          chance: null
+                          lower_sum: 0
+                          total: 0
+                    started_at: "2025-10-24T10:35:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not a player in this game
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                notInGame:
+                  summary: User not in this game
+                  value:
+                    error: "forbidden"
+                    message: "You are not a player in this game"
+        '404':
+          $ref: '#/components/responses/GameNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /games/{game_id}/roll:
+    post:
+      tags:
+        - Game Actions
+      summary: Roll dice
+      description: |
+        Rolls all unlocked dice. Can be called up to 3 times per turn.
+        
+        **Validations:**
+        - User must be current player
+        - Roll count must be < 3
+        - Game status must be "running"
+        
+        **Actions:**
+        1. Generate random values (1-6) for unlocked dice
+        2. Increment roll count
+        3. Reset timeout timer to 40s
+        4. Update database
+        5. Publish "dice_rolled" event with new values
+        
+        **After 3rd roll:** Player must select a field (cannot roll again).
+      operationId: rollDice
+      parameters:
+        - $ref: '#/components/parameters/GameIdPath'
+        - $ref: '#/components/parameters/UserIdHeader'
+        - $ref: '#/components/parameters/UsernameHeader'
+      responses:
+        '200':
+          description: Dice rolled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RollDiceResponse'
+              examples:
+                firstRoll:
+                  summary: First roll of turn
+                  value:
+                    game_id: "gam_xyz789"
+                    roll_count: 1
+                    dice:
+                      - value: 3
+                        locked: false
+                      - value: 3
+                        locked: false
+                      - value: 5
+                        locked: false
+                      - value: 2
+                        locked: false
+                      - value: 3
+                        locked: false
+                    can_roll_again: true
+                    must_select_field: false
+                thirdRoll:
+                  summary: Third and final roll
+                  value:
+                    game_id: "gam_xyz789"
+                    roll_count: 3
+                    dice:
+                      - value: 4
+                        locked: false
+                      - value: 3
+                        locked: true
+                      - value: 6
+                        locked: false
+                      - value: 2
+                        locked: false
+                      - value: 3
+                        locked: true
+                    can_roll_again: false
+                    must_select_field: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not allowed to roll
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                notYourTurn:
+                  summary: Not current player
+                  value:
+                    error: "forbidden"
+                    message: "It's not your turn"
+                    details:
+                      current_player: "usr_alice123"
+                maxRollsReached:
+                  summary: Already rolled 3 times
+                  value:
+                    error: "forbidden"
+                    message: "Maximum rolls (3) reached - must select a field"
+                    details:
+                      roll_count: 3
+        '404':
+          $ref: '#/components/responses/GameNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /games/{game_id}/toggle-dice:
+    post:
+      tags:
+        - Game Actions
+      summary: Toggle dice lock/unlock
+      description: |
+        Locks or unlocks specific dice. Locked dice keep their value on next roll.
+        
+        **Validations:**
+        - User must be current player
+        - Must have rolled at least once (roll_count > 0)
+        - Roll count must be < 3 (after 3rd roll, must select field)
+        - Dice indices must be valid (0-4)
+        
+        **Actions:**
+        1. Toggle lock state for specified dice
+        2. Reset timeout timer to 40s
+        3. Update database
+        4. Publish "dice_toggled" event
+        
+        **Note:** Can toggle multiple dice in one call.
+      operationId: toggleDice
+      parameters:
+        - $ref: '#/components/parameters/GameIdPath'
+        - $ref: '#/components/parameters/UserIdHeader'
+        - $ref: '#/components/parameters/UsernameHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToggleDiceRequest'
+            examples:
+              lockTwo:
+                summary: Lock dice at indices 1 and 4
+                value:
+                  dice_indices: [1, 4]
+      responses:
+        '200':
+          description: Dice toggled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToggleDiceResponse'
+              examples:
+                success:
+                  summary: Dice toggled
+                  value:
+                    game_id: "gam_xyz789"
+                    dice:
+                      - value: 3
+                        locked: false
+                      - value: 3
+                        locked: true
+                      - value: 5
+                        locked: false
+                      - value: 2
+                        locked: false
+                      - value: 3
+                        locked: true
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidIndex:
+                  summary: Invalid dice index
+                  value:
+                    error: "invalid_request"
+                    message: "Invalid dice index: must be between 0 and 4"
+                    details:
+                      invalid_indices: [5, 7]
+                notRolledYet:
+                  summary: Must roll first
+                  value:
+                    error: "invalid_request"
+                    message: "Cannot lock dice before first roll"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not allowed to toggle dice
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                notYourTurn:
+                  summary: Not current player
+                  value:
+                    error: "forbidden"
+                    message: "It's not your turn"
+        '404':
+          $ref: '#/components/responses/GameNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /games/{game_id}/select-field:
+    post:
+      tags:
+        - Game Actions
+      summary: Select field and end turn
+      description: |
+        Selects a field on the scorecard, calculates points, and ends the turn.
+        
+        **Validations:**
+        - User must be current player
+        - Must have rolled at least once
+        - Field must not already be filled
+        - Field name must be valid
+        
+        **Actions:**
+        1. Calculate points for selected field based on current dice
+        2. Update score board
+        3. Check for upper section bonus (if sum ≥ 63)
+        4. Check for multiple Kniffel bonus
+        5. Determine next player (skip inactive players)
+        6. Reset dice state (all unlocked, roll_count = 0)
+        7. Reset timeout timer
+        8. Check if game is finished (all players filled all 13 fields)
+        9. Publish "field_selected" event
+        10. If game finished: Publish "game_ended" event with final rankings
+        
+        **Special Rules:**
+        - **Crossing out:** Player can select any field for 0 points
+        - **Multiple Kniffel:** If Kniffel field filled and player rolls another Kniffel,
+          they get +50 bonus and can fill any upper section field (or cross out)
+      operationId: selectField
+      parameters:
+        - $ref: '#/components/parameters/GameIdPath'
+        - $ref: '#/components/parameters/UserIdHeader'
+        - $ref: '#/components/parameters/UsernameHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SelectFieldRequest'
+            examples:
+              validField:
+                summary: Select threes field
+                value:
+                  field: "threes"
+              crossOut:
+                summary: Cross out large_straight
+                value:
+                  field: "large_straight"
+      responses:
+        '200':
+          description: Field selected successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SelectFieldResponse'
+              examples:
+                turnComplete:
+                  summary: Turn ended, next player
+                  value:
+                    game_id: "gam_xyz789"
+                    field: "threes"
+                    points_earned: 9
+                    bonus_applied: null
+                    new_total: 12
+                    next_player_id: "usr_bob456"
+                    next_player_username: "Bob"
+                    game_finished: false
+                multipleKniffel:
+                  summary: Multiple Kniffel bonus
+                  value:
+                    game_id: "gam_xyz789"
+                    field: "sixes"
+                    points_earned: 30
+                    bonus_applied:
+                      type: "multiple_kniffel"
+                      points: 50
+                    new_total: 165
+                    next_player_id: "usr_alice123"
+                    next_player_username: "Alice"
+                    game_finished: false
+                gameEnded:
+                  summary: Game finished
+                  value:
+                    game_id: "gam_xyz789"
+                    field: "chance"
+                    points_earned: 23
+                    bonus_applied: null
+                    new_total: 187
+                    next_player_id: null
+                    next_player_username: null
+                    game_finished: true
+                    final_rankings:
+                      - user_id: "usr_alice123"
+                        username: "Alice"
+                        total_score: 234
+                        rank: 1
+                      - user_id: "usr_charlie789"
+                        username: "Charlie"
+                        total_score: 187
+                        rank: 2
+                      - user_id: "usr_bob456"
+                        username: "Bob"
+                        total_score: 156
+                        rank: 3
+        '400':
+          description: Invalid field selection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidField:
+                  summary: Invalid field name
+                  value:
+                    error: "invalid_request"
+                    message: "Invalid field name"
+                    details:
+                      valid_fields: ["ones", "twos", "threes", "fours", "fives", "sixes", "three_of_a_kind", "four_of_a_kind", "full_house", "small_straight", "large_straight", "kniffel", "chance"]
+                fieldAlreadyFilled:
+                  summary: Field already used
+                  value:
+                    error: "invalid_request"
+                    message: "Field 'threes' has already been filled"
+                    details:
+                      field: "threes"
+                      current_value: 9
+                notRolledYet:
+                  summary: Must roll first
+                  value:
+                    error: "invalid_request"
+                    message: "Must roll dice before selecting a field"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not allowed to select field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                notYourTurn:
+                  summary: Not current player
+                  value:
+                    error: "forbidden"
+                    message: "It's not your turn"
+        '404':
+          $ref: '#/components/responses/GameNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /games/{game_id}/end:
+    post:
+      tags:
+        - Game Actions
+      summary: End game prematurely
+      description: |
+        Ends the game before all fields are filled. Only available to lobby leader.
+        
+        **Validations:**
+        - User must be lobby leader
+        - Game status must be "running"
+        
+        **Actions:**
+        1. Calculate current scores for all players
+        2. Create final rankings
+        3. Update game status to "finished"
+        4. Publish "game_ended" event with current standings
+        5. All players redirected to end screen
+      operationId: endGame
+      parameters:
+        - $ref: '#/components/parameters/GameIdPath'
+        - $ref: '#/components/parameters/UserIdHeader'
+        - $ref: '#/components/parameters/UsernameHeader'
+      responses:
+        '200':
+          description: Game ended successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EndGameResponse'
+              examples:
+                success:
+                  summary: Game ended prematurely
+                  value:
+                    game_id: "gam_xyz789"
+                    status: "finished"
+                    ended_prematurely: true
+                    final_rankings:
+                      - user_id: "usr_alice123"
+                        username: "Alice"
+                        total_score: 89
+                        rank: 1
+                      - user_id: "usr_charlie789"
+                        username: "Charlie"
+                        total_score: 67
+                        rank: 2
+                      - user_id: "usr_bob456"
+                        username: "Bob"
+                        total_score: 45
+                        rank: 3
+                    ended_at: "2025-10-24T10:45:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not authorized to end game
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                notLeader:
+                  summary: Only leader can end game
+                  value:
+                    error: "forbidden"
+                    message: "Only the lobby leader can end the game prematurely"
+        '404':
+          $ref: '#/components/responses/GameNotFound'
+        '409':
+          description: Game already finished
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                alreadyFinished:
+                  summary: Game already finished
+                  value:
+                    error: "conflict"
+                    message: "Game is already finished"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /healthcheck:
+    get:
+      tags:
+        - Internal
+      summary: Health check endpoint
+      description: Returns service health status
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              examples:
+                healthy:
+                  summary: Healthy service
+                  value:
+                    status: "ok"
+                databaseDown:
+                  summary: Database connection lost
+                  value:
+                    status: "unhealthy"
+                    database: "disconnected"
+                    timestamp: "2025-10-24T10:30:00Z"
+
+components:
+  parameters:
+    GameIdPath:
+      name: game_id
+      in: path
+      required: true
+      description: Unique game identifier
+      schema:
+        type: string
+        pattern: '^gam_[a-zA-Z0-9]+$'
+        example: "gam_xyz789"
+
+    UserIdHeader:
+      name: X-User-ID
+      in: header
+      required: true
+      description: User ID from JWT (added by API Gateway)
+      schema:
+        type: string
+        pattern: '^usr_[a-zA-Z0-9]+$'
+        example: "usr_alice123"
+
+    UsernameHeader:
+      name: X-Username
+      in: header
+      required: true
+      description: Username from JWT (added by API Gateway)
+      schema:
+        type: string
+        minLength: 3
+        maxLength: 20
+        example: "Alice"
+
+  schemas:
+    CreateGameRequest:
+      type: object
+      required:
+        - lobby_id
+        - turn_order
+      properties:
+        lobby_id:
+          type: string
+          description: Associated lobby identifier
+          example: "lby_abc123"
+        turn_order:
+          type: array
+          description: Ordered list of players (already randomized by Lobby Service)
+          items:
+            $ref: '#/components/schemas/PlayerInfo'
+          minItems: 2
+          maxItems: 6
+
+    PlayerInfo:
+      type: object
+      required:
+        - user_id
+        - username
+      properties:
+        user_id:
+          type: string
+          description: User identifier
+          example: "usr_alice123"
+        username:
+          type: string
+          description: Display name
+          example: "Alice"
+
+    CreateGameResponse:
+      type: object
+      required:
+        - game_id
+        - lobby_id
+        - current_player_id
+        - turn_order
+      properties:
+        game_id:
+          type: string
+          description: Created game identifier
+          example: "gam_xyz789"
+        lobby_id:
+          type: string
+          description: Associated lobby identifier
+          example: "lby_abc123"
+        current_player_id:
+          type: string
+          description: First player's user ID
+          example: "usr_charlie789"
+        turn_order:
+          type: array
+          description: Player turn order (user IDs)
+          items:
+            type: string
+          example: ["usr_charlie789", "usr_alice123", "usr_bob456"]
+
+    GameStateResponse:
+      type: object
+      required:
+        - game_id
+        - lobby_id
+        - status
+        - current_player_id
+        - current_player_username
+        - roll_count
+        - dice
+        - timeout_remaining_seconds
+        - turn_order
+        - score_board
+        - started_at
+      properties:
+        game_id:
+          type: string
+          description: Game identifier
+          example: "gam_xyz789"
+        lobby_id:
+          type: string
+          description: Associated lobby identifier
+          example: "lby_abc123"
+        status:
+          type: string
+          enum:
+            - running
+            - finished
+          description: Current game status
+          example: "running"
+        current_player_id:
+          type: string
+          description: User ID of current player
+          example: "usr_alice123"
+        current_player_username:
+          type: string
+          description: Username of current player
+          example: "Alice"
+        roll_count:
+          type: integer
+          description: Number of rolls in current turn (0-3)
+          minimum: 0
+          maximum: 3
+          example: 1
+        dice:
+          type: array
+          description: Current dice state (5 dice)
+          items:
+            $ref: '#/components/schemas/Die'
+          minItems: 5
+          maxItems: 5
+        timeout_remaining_seconds:
+          type: integer
+          description: Seconds remaining before auto-skip (40s max)
+          minimum: 0
+          maximum: 40
+          example: 35
+        turn_order:
+          type: array
+          description: Player turn order (user IDs)
+          items:
+            type: string
+          example: ["usr_charlie789", "usr_alice123", "usr_bob456"]
+        score_board:
+          type: array
+          description: Score board for all players
+          items:
+            $ref: '#/components/schemas/PlayerScores'
+        started_at:
+          type: string
+          format: date-time
+          description: Game start timestamp
+          example: "2025-10-24T10:35:00Z"
+        finished_at:
+          type: string
+          format: date-time
+          description: Game end timestamp (only if status is "finished")
+          example: "2025-10-24T11:05:00Z"
+
+    Die:
+      type: object
+      required:
+        - value
+        - locked
+      properties:
+        value:
+          type: integer
+          description: Die value (1-6), null if not rolled yet
+          minimum: 1
+          maximum: 6
+          nullable: true
+          example: 3
+        locked:
+          type: boolean
+          description: Whether die is locked for next roll
+          example: false
+
+    PlayerScores:
+      type: object
+      required:
+        - user_id
+        - username
+        - scores
+      properties:
+        user_id:
+          type: string
+          description: User identifier
+          example: "usr_alice123"
+        username:
+          type: string
+          description: Display name
+          example: "Alice"
+        status:
+          type: string
+          enum:
+            - active
+            - inactive
+            - left
+          description: Player status
+          example: "active"
+        scores:
+          $ref: '#/components/schemas/ScoreCard'
+
+    ScoreCard:
+      type: object
+      required:
+        - ones
+        - twos
+        - threes
+        - fours
+        - fives
+        - sixes
+        - upper_sum
+        - bonus
+        - three_of_a_kind
+        - four_of_a_kind
+        - full_house
+        - small_straight
+        - large_straight
+        - kniffel
+        - chance
+        - lower_sum
+        - total
+      properties:
+        # Upper section
+        ones:
+          type: integer
+          nullable: true
+          description: Sum of all 1s
+          minimum: 0
+          maximum: 5
+          example: 3
+        twos:
+          type: integer
+          nullable: true
+          description: Sum of all 2s
+          minimum: 0
+          maximum: 10
+          example: null
+        threes:
+          type: integer
+          nullable: true
+          description: Sum of all 3s
+          minimum: 0
+          maximum: 15
+          example: null
+        fours:
+          type: integer
+          nullable: true
+          description: Sum of all 4s
+          minimum: 0
+          maximum: 20
+          example: null
+        fives:
+          type: integer
+          nullable: true
+          description: Sum of all 5s
+          minimum: 0
+          maximum: 25
+          example: null
+        sixes:
+          type: integer
+          nullable: true
+          description: Sum of all 6s
+          minimum: 0
+          maximum: 30
+          example: null
+        upper_sum:
+          type: integer
+          description: Sum of upper section (calculated)
+          minimum: 0
+          example: 3
+        bonus:
+          type: integer
+          nullable: true
+          description: Bonus points if upper_sum ≥ 63 (+35)
+          enum: [0, 35]
+          example: null
+
+        # Lower section
+        three_of_a_kind:
+          type: integer
+          nullable: true
+          description: Sum of all dice if at least 3 match
+          minimum: 0
+          maximum: 30
+          example: null
+        four_of_a_kind:
+          type: integer
+          nullable: true
+          description: Sum of all dice if at least 4 match
+          minimum: 0
+          maximum: 30
+          example: null
+        full_house:
+          type: integer
+          nullable: true
+          description: 25 points for 3-of-a-kind + pair
+          enum: [0, 25]
+          example: null
+        small_straight:
+          type: integer
+          nullable: true
+          description: 30 points for 4 consecutive dice
+          enum: [0, 30]
+          example: null
+        large_straight:
+          type: integer
+          nullable: true
+          description: 40 points for 5 consecutive dice
+          enum: [0, 40]
+          example: null
+        kniffel:
+          type: integer
+          nullable: true
+          description: 50 points for all 5 dice matching
+          enum: [0, 50]
+          example: null
+        chance:
+          type: integer
+          nullable: true
+          description: Sum of all dice (no restrictions)
+          minimum: 0
+          maximum: 30
+          example: null
+        lower_sum:
+          type: integer
+          description: Sum of lower section (calculated)
+          minimum: 0
+          example: 0
+        total:
+          type: integer
+          description: Total score (upper + bonus + lower)
+          minimum: 0
+          example: 3
+        kniffel_bonus_count:
+          type: integer
+          description: Number of additional Kniffels after first (×50 points each)
+          minimum: 0
+          default: 0
+          example: 0
+
+    RollDiceResponse:
+      type: object
+      required:
+        - game_id
+        - roll_count
+        - dice
+        - can_roll_again
+        - must_select_field
+      properties:
+        game_id:
+          type: string
+          description: Game identifier
+          example: "gam_xyz789"
+        roll_count:
+          type: integer
+          description: Current roll count (1-3)
+          minimum: 1
+          maximum: 3
+          example: 1
+        dice:
+          type: array
+          description: Current dice state
+          items:
+            $ref: '#/components/schemas/Die'
+          minItems: 5
+          maxItems: 5
+        can_roll_again:
+          type: boolean
+          description: Whether player can roll again
+          example: true
+        must_select_field:
+          type: boolean
+          description: Whether player must now select a field
+          example: false
+
+    ToggleDiceRequest:
+      type: object
+      required:
+        - dice_indices
+      properties:
+        dice_indices:
+          type: array
+          description: Indices of dice to toggle (0-4)
+          items:
+            type: integer
+            minimum: 0
+            maximum: 4
+          minItems: 1
+          maxItems: 5
+          uniqueItems: true
+          example: [1, 4]
+
+    ToggleDiceResponse:
+      type: object
+      required:
+        - game_id
+        - dice
+      properties:
+        game_id:
+          type: string
+          description: Game identifier
+          example: "gam_xyz789"
+        dice:
+          type: array
+          description: Updated dice state
+          items:
+            $ref: '#/components/schemas/Die'
+          minItems: 5
+          maxItems: 5
+
+    SelectFieldRequest:
+      type: object
+      required:
+        - field
+      properties:
+        field:
+          type: string
+          description: Field name to select
+          enum:
+            - ones
+            - twos
+            - threes
+            - fours
+            - fives
+            - sixes
+            - three_of_a_kind
+            - four_of_a_kind
+            - full_house
+            - small_straight
+            - large_straight
+            - kniffel
+            - chance
+          example: "threes"
+
+    SelectFieldResponse:
+      type: object
+      required:
+        - game_id
+        - field
+        - points_earned
+        - new_total
+        - game_finished
+      properties:
+        game_id:
+          type: string
+          description: Game identifier
+          example: "gam_xyz789"
+        field:
+          type: string
+          description: Selected field name
+          example: "threes"
+        points_earned:
+          type: integer
+          description: Points earned for this field
+          minimum: 0
+          example: 9
+        bonus_applied:
+          type: object
+          nullable: true
+          description: Bonus information if applicable
+          properties:
+            type:
+              type: string
+              enum:
+                - upper_section_bonus
+                - multiple_kniffel
+              description: Type of bonus
+              example: "multiple_kniffel"
+            points:
+              type: integer
+              description: Bonus points
+              example: 50
+        new_total:
+          type: integer
+          description: Player's new total score
+          minimum: 0
+          example: 12
+        next_player_id:
+          type: string
+          nullable: true
+          description: Next player's user ID (null if game finished)
+          example: "usr_bob456"
+        next_player_username:
+          type: string
+          nullable: true
+          description: Next player's username (null if game finished)
+          example: "Bob"
+        game_finished:
+          type: boolean
+          description: Whether game is now finished
+          example: false
+        final_rankings:
+          type: array
+          nullable: true
+          description: Final rankings (only if game_finished is true)
+          items:
+            $ref: '#/components/schemas/PlayerRanking'
+
+    PlayerRanking:
+      type: object
+      required:
+        - user_id
+        - username
+        - total_score
+        - rank
+      properties:
+        user_id:
+          type: string
+          description: User identifier
+          example: "usr_alice123"
+        username:
+          type: string
+          description: Display name
+          example: "Alice"
+        total_score:
+          type: integer
+          description: Final total score
+          minimum: 0
+          example: 234
+        rank:
+          type: integer
+          description: Final rank (1 = winner)
+          minimum: 1
+          example: 1
+
+    EndGameResponse:
+      type: object
+      required:
+        - game_id
+        - status
+        - ended_prematurely
+        - final_rankings
+        - ended_at
+      properties:
+        game_id:
+          type: string
+          description: Game identifier
+          example: "gam_xyz789"
+        status:
+          type: string
+          enum: [finished]
+          description: Game status
+          example: "finished"
+        ended_prematurely:
+          type: boolean
+          description: Whether game was ended before completion
+          example: true
+        final_rankings:
+          type: array
+          description: Final rankings with current scores
+          items:
+            $ref: '#/components/schemas/PlayerRanking'
+        ended_at:
+          type: string
+          format: date-time
+          description: Game end timestamp
+          example: "2025-10-24T10:45:00Z"
+
+    HealthResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+          description: Service health status
+          example: "ok"
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Error code
+          example: "game_not_found"
+        message:
+          type: string
+          description: Human-readable error message
+          example: "Game not found"
+        details:
+          type: object
+          description: Additional error details
+          additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            missingField:
+              summary: Missing required field
+              value:
+                error: "invalid_request"
+                message: "Missing required field: field"
+
+    Unauthorized:
+      description: Missing or invalid authentication
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            missingAuth:
+              summary: Missing authentication headers
+              value:
+                error: "unauthorized"
+                message: "Missing required authentication headers"
+
+    GameNotFound:
+      description: Game not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            notFound:
+              summary: Game does not exist
+              value:
+                error: "game_not_found"
+                message: "Game not found"
+
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            generic:
+              summary: Generic server error
+              value:
+                error: "internal_error"
+                message: "An unexpected error occurred"
+            databaseError:
+              summary: Database error
+              value:
+                error: "database_error"
+                message: "Failed to query database"

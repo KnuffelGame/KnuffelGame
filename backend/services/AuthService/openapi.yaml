@@ -1,0 +1,470 @@
+openapi: 3.0.3
+info:
+  title: Knuffel Auth Service API
+  description: |
+    Authentication service for the Knuffel multiplayer Kniffel application.
+    
+    **Responsibilities:**
+    - JWT token creation (for guest accounts)
+    - JWT token validation (for all requests)
+    - Token refresh (for OIDC, stretch goal)
+    
+    **Technical Details:**
+    - Language: Go
+    - Library: golang-jwt/jwt
+    - Storage: Stateless (no database)
+    - Secret: From environment variable
+  version: 1.0.0
+  contact:
+    name: Knuffel Team
+
+servers:
+  - url: http://localhost:8081
+    description: AuthService (port from docker-compose.yaml)
+
+tags:
+  - name: Internal
+    description: Internal endpoints (not exposed via API Gateway)
+  - name: Stretch Goal
+    description: OIDC integration (optional feature)
+
+paths:
+  /internal/create:
+    post:
+      tags:
+        - Internal
+      summary: Create JWT token for guest user
+      description: |
+        Creates a new JWT token for a guest user session. 
+        Used when a user creates or joins a lobby for the first time.
+        
+        **Token Claims:**
+        - `sub`: User ID
+        - `name`: Username
+        - `iat`: Issued At timestamp
+        - `exp`: Expiry timestamp (24h from creation)
+        - `iss`: "knuffel-auth-service"
+      operationId: createToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTokenRequest'
+            examples:
+              newGuestUser:
+                summary: New guest user
+                value:
+                  user_id: "550e8400-e29b-41d4-a716-446655440000"
+                  username: "Alice"
+      responses:
+        '200':
+          description: Token created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateTokenResponse'
+              examples:
+                success:
+                  summary: Successful token creation
+                  value:
+                    token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c3JfYWJjMTIzZGVmNDU2IiwibmFtZSI6IkFsaWNlIiwiaWF0IjoxNjk4MzQ1NjAwLCJleHAiOjE2OTg0MzIwMDAsImlzcyI6ImtudWZmZWwtYXV0aC1zZXJ2aWNlIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /internal/validate:
+    post:
+      tags:
+        - Internal
+      summary: Validate JWT token
+      description: |
+        Validates a JWT token and returns the user context if valid.
+        Used by the API Gateway for every incoming request.
+        
+        **Validation checks:**
+        - Signature verification (HMAC-SHA256)
+        - Expiry check
+        - Issuer verification
+      operationId: validateToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidateTokenRequest'
+            examples:
+              validToken:
+                summary: Valid token
+                value:
+                  token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+      responses:
+        '200':
+          description: Token validation result (both valid and invalid tokens return 200)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidateTokenSuccessResponse'
+                  - $ref: '#/components/schemas/ValidateTokenFailureResponse'
+              examples:
+                valid:
+                  summary: Valid token
+                  value:
+                    valid: true
+                    user_id: "550e8400-e29b-41d4-a716-446655440000"
+                    username: "Alice"
+                    is_guest: true
+                expired:
+                  summary: Expired token
+                  value:
+                    valid: false
+                    error: "token expired"
+                invalidSignature:
+                  summary: Invalid signature
+                  value:
+                    valid: false
+                    error: "invalid signature"
+        '400':
+          description: Invalid request (malformed JSON or token format)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ErrorResponse'
+                  - $ref: '#/components/schemas/ValidateTokenFailureResponse'
+              examples:
+                invalidJson:
+                  summary: Invalid JSON body
+                  value:
+                    error: "invalid_request"
+                    message: "Invalid JSON body"
+                    details:
+                      detail: "unexpected EOF"
+                invalidFormat:
+                  summary: Token format validation failed
+                  value:
+                    valid: false
+                    error: "invalid format"
+        '401':
+          description: Token validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidateTokenFailureResponse'
+              examples:
+                tokenExpired:
+                  summary: Token expired (401)
+                  value:
+                    valid: false
+                    error: "token expired"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /internal/oidc-exchange:
+    post:
+      tags:
+        - Internal
+        - Stretch Goal
+      summary: Exchange OIDC token for Knuffel JWT
+      description: |
+        **Stretch Goal Feature**
+        
+        Exchanges a Google OAuth/OIDC token for a Knuffel JWT token.
+        Used for account-based login (not guest accounts).
+        
+        **Flow:**
+        1. User authenticates with Google OAuth
+        2. Frontend receives Google ID token
+        3. Frontend sends token to API Gateway
+        4. Gateway forwards to Auth Service
+        5. Auth Service validates Google token
+        6. Auth Service creates Knuffel JWT with user profile
+      operationId: oidcExchange
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OIDCExchangeRequest'
+            examples:
+              googleToken:
+                summary: Google ID token
+                value:
+                  provider: "google"
+                  id_token: "eyJhbGciOiJSUzI1NiIsImtpZCI6IjE..."
+      responses:
+        '200':
+          description: Token exchange successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OIDCExchangeResponse'
+              examples:
+                success:
+                  summary: Successful exchange
+                  value:
+                    token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                    user_id: "usr_google_abc123"
+                    username: "alice@gmail.com"
+                    email: "alice@gmail.com"
+                    is_guest: false
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: OIDC token validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidToken:
+                  summary: Invalid OIDC token
+                  value:
+                    error: "invalid_token"
+                    message: "OIDC token validation failed"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /healthcheck:
+    get:
+      tags:
+        - Internal
+      summary: Health check endpoint
+      description: Returns service health status
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              examples:
+                healthy:
+                  summary: Healthy service
+                  value:
+                    status: "ok"
+
+components:
+  schemas:
+    CreateTokenRequest:
+      type: object
+      required:
+        - user_id
+        - username
+      properties:
+        user_id:
+          type: string
+          format: uuid
+          description: Unique user identifier (UUID v4)
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        username:
+          type: string
+          description: Display name for the user (letters, digits, spaces)
+          maxLength: 20
+          example: "Alice"
+          pattern: '^[A-Za-z0-9 ]+$'
+
+    CreateTokenResponse:
+      type: object
+      required:
+        - token
+      properties:
+        token:
+          type: string
+          description: JWT token (valid for 24h)
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c3JfYWJjMTIzZGVmNDU2IiwibmFtZSI6IkFsaWNlIiwiaWF0IjoxNjk4MzQ1NjAwLCJleHAiOjE2OTg0MzIwMDAsImlzcyI6ImtudWZmZWwtYXV0aC1zZXJ2aWNlIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+
+    ValidateTokenRequest:
+      type: object
+      required:
+        - token
+      properties:
+        token:
+          type: string
+          description: JWT token to validate
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+
+    ValidateTokenSuccessResponse:
+      type: object
+      required:
+        - valid
+        - user_id
+        - username
+        - is_guest
+      properties:
+        valid:
+          type: boolean
+          enum: [true]
+          description: Token is valid
+        user_id:
+          type: string
+          format: uuid
+          description: User ID from token
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        username:
+          type: string
+          description: Username from token
+          example: "Alice"
+        is_guest:
+          type: boolean
+          description: Whether this is a guest account (always true for this service)
+          example: true
+
+    ValidateTokenFailureResponse:
+      type: object
+      required:
+        - valid
+        - error
+      properties:
+        valid:
+          type: boolean
+          enum: [false]
+          description: Token is invalid
+        error:
+          type: string
+          description: Reason for validation failure
+          enum:
+            - "token expired"
+            - "invalid signature"
+            - "invalid format"
+            - "invalid issuer"
+            - "missing claims"
+          example: "token expired"
+
+    OIDCExchangeRequest:
+      type: object
+      required:
+        - provider
+        - id_token
+      properties:
+        provider:
+          type: string
+          description: OIDC provider name
+          enum:
+            - google
+          example: "google"
+        id_token:
+          type: string
+          description: OIDC ID token from provider
+          example: "eyJhbGciOiJSUzI1NiIsImtpZCI6IjE..."
+
+    OIDCExchangeResponse:
+      type: object
+      required:
+        - token
+        - user_id
+        - username
+        - is_guest
+      properties:
+        token:
+          type: string
+          description: Knuffel JWT token
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+        user_id:
+          type: string
+          description: User ID (prefixed with provider)
+          example: "usr_google_abc123"
+        username:
+          type: string
+          description: Username from OIDC profile
+          example: "alice@gmail.com"
+        email:
+          type: string
+          format: email
+          description: Email from OIDC profile
+          example: "alice@gmail.com"
+        is_guest:
+          type: boolean
+          enum: [false]
+          description: Always false for OIDC users
+
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - timestamp
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+          description: Service health status
+          example: "ok"
+        timestamp:
+          type: string
+          format: date-time
+          description: Current server timestamp
+          example: "2025-10-24T10:30:00Z"
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Error code
+          example: "invalid_request"
+        message:
+          type: string
+          description: Human-readable error message
+          example: "Missing required field: user_id"
+        details:
+          type: object
+          description: Additional error details
+          additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            missingField:
+              summary: Missing required field
+              value:
+                error: "invalid_request"
+                message: "Validation failed"
+                details:
+                  fields:
+                    UserID: "required"
+            invalidJson:
+              summary: Invalid JSON
+              value:
+                error: "invalid_request"
+                message: "Invalid JSON body"
+                details:
+                  detail: "unexpected EOF"
+            invalidUsername:
+              summary: Invalid username length
+              value:
+                error: "invalid_request"
+                message: "Username must be between 3 and 20 characters"
+                details:
+                  field: "username"
+                  constraint: "length"
+
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            serverError:
+              summary: Internal server error
+              value:
+                error: "token_generation_failed"
+                message: "Failed to generate JWT token"
+                details:
+                  detail: "signing method error"
+            tokenGeneration:
+              summary: Token generation failed
+              value:
+                error: "token_generation_failed"
+                message: "Failed to generate JWT token"

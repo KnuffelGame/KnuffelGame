@@ -1,0 +1,824 @@
+openapi: 3.0.3
+info:
+  title: Knuffel API Gateway
+  description: |
+    Central API Gateway for the Knuffel multiplayer Kniffel application.
+    
+    **Responsibilities:**
+    - Routing of client requests to backend services
+    - Central JWT validation (via Auth Service)
+    - Request forwarding with user context
+    - CORS handling
+    - Rate limiting (optional)
+    
+    **Technical Details:**
+    - Language: Go
+    - Storage: Stateless (no database)
+    - Authentication: JWT validation via Auth Service
+    - Routing: Path-based routing to internal services
+    
+    **Architecture:**
+    ```
+    Client → API Gateway → JWT Validation (Auth Service)
+                ↓
+          Add Headers (X-User-ID, X-Username)
+                ↓
+          Route to Backend Service (Lobby/Game)
+                ↓
+          Return Response to Client
+    ```
+    
+    **Request Flow:**
+    1. Client sends request with JWT cookie
+    2. Gateway extracts JWT from cookie
+    3. Gateway validates JWT via Auth Service (POST /internal/validate)
+    4. Auth Service returns user context (user_id, username)
+    5. Gateway adds headers: X-User-ID, X-Username
+    6. Gateway forwards request to appropriate backend service
+    7. Backend service processes request
+    8. Gateway returns response to client
+    
+    **CORS Policy:**
+    - Allowed Origins: https://knuffel.uni.de (configurable)
+    - Allowed Methods: GET, POST, PUT, DELETE, OPTIONS
+    - Allowed Headers: Content-Type, Cookie
+    - Credentials: true (for cookie-based auth)
+    
+    **Rate Limiting (Optional):**
+    - 10 requests per second per user
+    - Applied after JWT validation
+  version: 1.0.0
+  contact:
+    name: Knuffel Team
+
+servers:
+  - url: http://localhost:8080
+    description: APIGateway (port from docker-compose.yaml)
+
+tags:
+  - name: Authentication
+    description: Authentication endpoints
+  - name: Lobbies
+    description: Lobby management (proxied to Lobby Service)
+  - name: Games
+    description: Game actions (proxied to Game Service)
+
+paths:
+  /auth/guest:
+    post:
+      tags:
+        - Authentication
+      summary: Create guest account and get JWT
+      description: |
+        Creates a new guest user account and returns a JWT token.
+        
+        **Flow:**
+        1. Gateway generates unique user_id
+        2. Gateway calls Auth Service to create JWT
+        3. Gateway sets JWT as HTTP-Only cookie
+        4. Gateway returns user info
+        
+        **Cookie attributes:**
+        - HTTP-Only: true (prevents JavaScript access)
+        - Secure: true (HTTPS only in production)
+        - SameSite: Strict (CSRF protection)
+        - Max-Age: 86400 (24 hours)
+        - Path: /
+      operationId: createGuestAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGuestRequest'
+            examples:
+              newGuest:
+                summary: Create guest user
+                value:
+                  username: "Alice"
+      responses:
+        '200':
+          description: Guest account created successfully
+          headers:
+            Set-Cookie:
+              description: JWT authentication cookie
+              schema:
+                type: string
+                example: "jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...; HttpOnly; Secure; SameSite=Strict; Max-Age=86400; Path=/"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuestAccountResponse'
+              examples:
+                success:
+                  summary: Guest account created
+                  value:
+                    user_id: "usr_abc123def456"
+                    username: "Alice"
+                    is_guest: true
+                    expires_at: "2025-10-25T10:30:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /lobbies:
+    post:
+      tags:
+        - Lobbies
+      summary: Create new lobby
+      description: |
+        Creates a new lobby with the authenticated user as leader.
+        
+        **Proxied to:** Lobby Service POST /lobbies
+      operationId: createLobby
+      security:
+        - JWTCookie: []
+      responses:
+        '201':
+          description: Lobby created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LobbyDetailResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /lobbies/{lobby_id}:
+    get:
+      tags:
+        - Lobbies
+      summary: Get lobby details
+      description: |
+        Returns current lobby state.
+        
+        **Proxied to:** Lobby Service GET /lobbies/{lobby_id}
+      operationId: getLobby
+      security:
+        - JWTCookie: []
+      parameters:
+        - $ref: '#/components/parameters/LobbyIdPath'
+      responses:
+        '200':
+          description: Lobby details retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LobbyDetailResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/LobbyNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /lobbies/join:
+    post:
+      tags:
+        - Lobbies
+      summary: Join lobby by join code
+      description: |
+        Joins an existing lobby using join code.
+        
+        **Proxied to:** Lobby Service POST /lobbies/join
+      operationId: joinLobby
+      security:
+        - JWTCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JoinLobbyRequest'
+      responses:
+        '200':
+          description: Successfully joined lobby
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LobbyDetailResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Lobby not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Cannot join lobby
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /lobbies/{lobby_id}/kick:
+    post:
+      tags:
+        - Lobbies
+      summary: Kick player from lobby
+      description: |
+        Removes a player from the lobby. Only available to lobby leader.
+        
+        **Proxied to:** Lobby Service POST /lobbies/{lobby_id}/kick
+      operationId: kickPlayer
+      security:
+        - JWTCookie: []
+      parameters:
+        - $ref: '#/components/parameters/LobbyIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/KickPlayerRequest'
+      responses:
+        '200':
+          description: Player kicked successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Lobby or player not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /lobbies/{lobby_id}/start:
+    post:
+      tags:
+        - Lobbies
+      summary: Start game
+      description: |
+        Starts the game for this lobby. Only available to lobby leader.
+        
+        **Proxied to:** Lobby Service POST /lobbies/{lobby_id}/start
+      operationId: startGame
+      security:
+        - JWTCookie: []
+      parameters:
+        - $ref: '#/components/parameters/LobbyIdPath'
+      responses:
+        '200':
+          description: Game started successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StartGameResponse'
+        '400':
+          description: Cannot start game
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/LobbyNotFound'
+        '409':
+          description: Game already started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /lobbies/{lobby_id}/leave:
+    post:
+      tags:
+        - Lobbies
+      summary: Leave lobby
+      description: |
+        Removes the authenticated user from the lobby.
+        
+        **Proxied to:** Lobby Service POST /lobbies/{lobby_id}/leave
+      operationId: leaveLobby
+      security:
+        - JWTCookie: []
+      parameters:
+        - $ref: '#/components/parameters/LobbyIdPath'
+      responses:
+        '200':
+          description: Successfully left lobby
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Lobby not found or user not in lobby
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /games/{game_id}:
+    get:
+      tags:
+        - Games
+      summary: Get game state
+      description: |
+        Returns complete game state.
+        
+        **Proxied to:** Game Service GET /games/{game_id}
+      operationId: getGameState
+      security:
+        - JWTCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GameIdPath'
+      responses:
+        '200':
+          description: Game state retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameStateResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not a player in this game
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/GameNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /games/{game_id}/roll:
+    post:
+      tags:
+        - Games
+      summary: Roll dice
+      description: |
+        Rolls all unlocked dice.
+        
+        **Proxied to:** Game Service POST /games/{game_id}/roll
+      operationId: rollDice
+      security:
+        - JWTCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GameIdPath'
+      responses:
+        '200':
+          description: Dice rolled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RollDiceResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not allowed to roll
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/GameNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /games/{game_id}/toggle-dice:
+    post:
+      tags:
+        - Games
+      summary: Toggle dice lock/unlock
+      description: |
+        Locks or unlocks specific dice.
+        
+        **Proxied to:** Game Service POST /games/{game_id}/toggle-dice
+      operationId: toggleDice
+      security:
+        - JWTCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GameIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToggleDiceRequest'
+      responses:
+        '200':
+          description: Dice toggled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToggleDiceResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not allowed to toggle dice
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/GameNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /games/{game_id}/select-field:
+    post:
+      tags:
+        - Games
+      summary: Select field and end turn
+      description: |
+        Selects a field on the scorecard and ends the turn.
+        
+        **Proxied to:** Game Service POST /games/{game_id}/select-field
+      operationId: selectField
+      security:
+        - JWTCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GameIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SelectFieldRequest'
+      responses:
+        '200':
+          description: Field selected successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SelectFieldResponse'
+        '400':
+          description: Invalid field selection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not allowed to select field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/GameNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /games/{game_id}/end:
+    post:
+      tags:
+        - Games
+      summary: End game prematurely
+      description: |
+        Ends the game before completion. Only available to lobby leader.
+        
+        **Proxied to:** Game Service POST /games/{game_id}/end
+      operationId: endGame
+      security:
+        - JWTCookie: []
+      parameters:
+        - $ref: '#/components/parameters/GameIdPath'
+      responses:
+        '200':
+          description: Game ended successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EndGameResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/GameNotFound'
+        '409':
+          description: Game already finished
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  parameters:
+    LobbyIdPath:
+      name: lobby_id
+      in: path
+      required: true
+      description: Unique lobby identifier
+      schema:
+        type: string
+        pattern: '^lby_[a-zA-Z0-9]+$'
+        example: "lby_abc123"
+
+    GameIdPath:
+      name: game_id
+      in: path
+      required: true
+      description: Unique game identifier
+      schema:
+        type: string
+        pattern: '^gam_[a-zA-Z0-9]+$'
+        example: "gam_xyz789"
+
+  schemas:
+    CreateGuestRequest:
+      type: object
+      required:
+        - username
+      properties:
+        username:
+          type: string
+          description: Display name for guest user
+          minLength: 3
+          maxLength: 20
+          example: "Alice"
+
+    GuestAccountResponse:
+      type: object
+      required:
+        - user_id
+        - username
+        - is_guest
+        - expires_at
+      properties:
+        user_id:
+          type: string
+          description: Generated user identifier
+          example: "usr_abc123def456"
+        username:
+          type: string
+          description: Display name
+          example: "Alice"
+        is_guest:
+          type: boolean
+          enum: [true]
+          description: Always true for guest accounts
+        expires_at:
+          type: string
+          format: date-time
+          description: JWT expiration timestamp (24h from now)
+          example: "2025-10-25T10:30:00Z"
+
+    LobbyDetailResponse:
+      type: object
+      description: Full lobby details (schema defined in Lobby Service)
+
+    JoinLobbyRequest:
+      type: object
+      required:
+        - join_code
+      properties:
+        join_code:
+          type: string
+          description: 6-character join code
+          pattern: '^[A-Za-z0-9]{6}$'
+          example: "ABC123"
+
+    KickPlayerRequest:
+      type: object
+      required:
+        - target_user_id
+      properties:
+        target_user_id:
+          type: string
+          description: User ID of player to kick
+          example: "usr_bob456"
+
+    StartGameResponse:
+      type: object
+      description: Game start response (schema defined in Lobby Service)
+
+    GameStateResponse:
+      type: object
+      description: Full game state (schema defined in Game Service)
+
+    RollDiceResponse:
+      type: object
+      description: Roll dice response (schema defined in Game Service)
+
+    ToggleDiceRequest:
+      type: object
+      required:
+        - dice_indices
+      properties:
+        dice_indices:
+          type: array
+          items:
+            type: integer
+            minimum: 0
+            maximum: 4
+          example: [1, 4]
+
+    ToggleDiceResponse:
+      type: object
+      description: Toggle dice response (schema defined in Game Service)
+
+    SelectFieldRequest:
+      type: object
+      required:
+        - field
+      properties:
+        field:
+          type: string
+          enum:
+            - ones
+            - twos
+            - threes
+            - fours
+            - fives
+            - sixes
+            - three_of_a_kind
+            - four_of_a_kind
+            - full_house
+            - small_straight
+            - large_straight
+            - kniffel
+            - chance
+          example: "threes"
+
+    SelectFieldResponse:
+      type: object
+      description: Select field response (schema defined in Game Service)
+
+    EndGameResponse:
+      type: object
+      description: End game response (schema defined in Game Service)
+
+    SuccessResponse:
+      type: object
+      required:
+        - success
+        - message
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        message:
+          type: string
+          example: "Operation completed successfully"
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Error code
+          example: "lobby_not_found"
+        message:
+          type: string
+          description: Human-readable error message
+          example: "Lobby not found"
+        details:
+          type: object
+          description: Additional error details
+          additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            missingField:
+              summary: Missing required field
+              value:
+                error: "invalid_request"
+                message: "Missing required field: username"
+            invalidUsername:
+              summary: Invalid username length
+              value:
+                error: "invalid_request"
+                message: "Username must be between 3 and 20 characters"
+
+    Unauthorized:
+      description: Missing or invalid authentication
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            missingToken:
+              summary: No JWT cookie
+              value:
+                error: "unauthorized"
+                message: "Authentication required"
+            invalidToken:
+              summary: Invalid or expired JWT
+              value:
+                error: "unauthorized"
+                message: "Invalid or expired authentication token"
+
+    LobbyNotFound:
+      description: Lobby not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            notFound:
+              summary: Lobby does not exist
+              value:
+                error: "lobby_not_found"
+                message: "Lobby not found"
+
+    GameNotFound:
+      description: Game not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            notFound:
+              summary: Game does not exist
+              value:
+                error: "game_not_found"
+                message: "Game not found"
+
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            generic:
+              summary: Generic server error
+              value:
+                error: "internal_error"
+                message: "An unexpected error occurred"
+            serviceUnavailable:
+              summary: Backend service unavailable
+              value:
+                error: "service_unavailable"
+                message: "Backend service temporarily unavailable"
+
+  securitySchemes:
+    JWTCookie:
+      type: apiKey
+      in: cookie
+      name: jwt
+      description: JWT authentication token (HTTP-Only cookie)
+
+security:
+  - JWTCookie: []
