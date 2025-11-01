@@ -53,6 +53,9 @@ services:
       - env.d/LobbyService.env
     ports:
       - 8083:8083
+    depends_on:
+      Postgres:
+        condition: service_healthy
 
   SSEService:
     image: ghcr.io/knuffelgame/sseservice:latest
