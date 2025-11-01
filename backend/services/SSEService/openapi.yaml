@@ -1,0 +1,890 @@
+openapi: 3.0.3
+info:
+  title: Knuffel SSE Service API
+  description: |
+    Server-Sent Events (SSE) service for the Knuffel multiplayer Kniffel application.
+    
+    **Responsibilities:**
+    - Central management of all SSE connections
+    - Event broadcasting to clients
+    - Connection management (subscribe/unsubscribe)
+    - Event routing by lobby/game ID
+    
+    **Technical Details:**
+    - Language: Go
+    - Storage: In-Memory (Map: lobby_id → []SSE-Connections)
+    - No database (stateless connections)
+    - Single-instance for MVP (no Redis pub/sub)
+    
+    **Architecture:**
+    ```
+    Services (Lobby/Game) → POST /internal/publish → SSE Service
+                                                          ↓
+                                                    Broadcast to
+                                                    Connections
+                                                          ↓
+                                            Clients ← SSE Stream
+    ```
+    
+    **Connection Lifecycle:**
+    1. Client opens SSE connection (GET /events/lobby/:id or /events/game/:id)
+    2. SSE Service validates JWT and registers connection
+    3. Services publish events via POST /internal/publish
+    4. SSE Service broadcasts events to relevant connections
+    5. Keep-alive messages sent every 30s to prevent timeout
+    6. Client closes connection or connection breaks
+    7. SSE Service removes connection from registry
+    
+    **Authentication:**
+    SSE endpoints require JWT authentication via cookie.
+    Internal publish endpoints are only accessible from other services.
+  version: 1.0.0
+  contact:
+    name: Knuffel Team
+
+servers:
+  - url: http://localhost:8084
+    description: SSEService (port from docker-compose.yaml)
+
+tags:
+  - name: SSE Streams
+    description: Client SSE connection endpoints
+  - name: Internal
+    description: Internal event publishing endpoints
+
+paths:
+  /events/lobby/{lobby_id}:
+    get:
+      tags:
+        - SSE Streams
+      summary: Subscribe to lobby events
+      description: |
+        Opens a Server-Sent Events stream for lobby updates.
+        Connection stays open until client closes or server terminates.
+        
+        **Events received:**
+        - `player_joined`: New player joined lobby
+        - `player_left`: Player left lobby
+        - `player_kicked`: Player was kicked from lobby
+        - `leader_changed`: Lobby leader changed
+        - `game_started`: Game has started
+        - `keep_alive`: Periodic heartbeat (every 30s)
+        
+        **Authentication:**
+        Requires JWT token in cookie. User must be in the lobby.
+        
+        **Connection behavior:**
+        - Keep-alive messages every 30 seconds
+        - Automatic reconnect handling (client should retry with exponential backoff)
+        - Connection closed if user is kicked or leaves
+      operationId: subscribeLobbyEvents
+      parameters:
+        - name: lobby_id
+          in: path
+          required: true
+          description: Lobby identifier
+          schema:
+            type: string
+            pattern: '^lby_[a-zA-Z0-9]+$'
+            example: "lby_abc123"
+        - name: jwt
+          in: cookie
+          required: true
+          description: JWT authentication token
+          schema:
+            type: string
+      responses:
+        '200':
+          description: SSE stream established
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Server-Sent Events stream
+              examples:
+                playerJoined:
+                  summary: Player joined event
+                  value: |
+                    event: player_joined
+                    data: {"user_id":"usr_bob456","username":"Bob","player_count":2}
+
+                playerLeft:
+                  summary: Player left event
+                  value: |
+                    event: player_left
+                    data: {"user_id":"usr_bob456","username":"Bob","player_count":1}
+
+                playerKicked:
+                  summary: Player kicked event
+                  value: |
+                    event: player_kicked
+                    data: {"user_id":"usr_bob456","username":"Bob","kicked_by":"usr_alice123"}
+
+                leaderChanged:
+                  summary: Leader changed event
+                  value: |
+                    event: leader_changed
+                    data: {"old_leader_id":"usr_alice123","new_leader_id":"usr_bob456","new_leader_username":"Bob"}
+
+                gameStarted:
+                  summary: Game started event
+                  value: |
+                    event: game_started
+                    data: {"game_id":"gam_xyz789","turn_order":["usr_charlie789","usr_alice123","usr_bob456"],"current_player_id":"usr_charlie789"}
+
+                keepAlive:
+                  summary: Keep-alive heartbeat
+                  value: |
+                    event: keep_alive
+                    data: {"timestamp":"2025-10-24T10:30:00Z"}
+        '401':
+          description: Authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidToken:
+                  summary: Invalid or expired JWT
+                  value:
+                    error: "unauthorized"
+                    message: "Invalid or expired authentication token"
+        '403':
+          description: Not authorized to access this lobby
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                notInLobby:
+                  summary: User not in lobby
+                  value:
+                    error: "forbidden"
+                    message: "You are not a member of this lobby"
+        '404':
+          description: Lobby not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                lobbyNotFound:
+                  summary: Lobby does not exist
+                  value:
+                    error: "lobby_not_found"
+                    message: "Lobby not found"
+
+  /events/game/{game_id}:
+    get:
+      tags:
+        - SSE Streams
+      summary: Subscribe to game events
+      description: |
+        Opens a Server-Sent Events stream for game updates.
+        Connection stays open until client closes or game ends.
+        
+        **Events received:**
+        - `dice_rolled`: Player rolled dice
+        - `dice_toggled`: Dice locked/unlocked
+        - `field_selected`: Player selected field
+        - `turn_changed`: Next player's turn
+        - `player_inactive`: Player timed out
+        - `player_active`: Player reconnected
+        - `game_ended`: Game finished
+        - `keep_alive`: Periodic heartbeat (every 30s)
+        
+        **Authentication:**
+        Requires JWT token in cookie. User must be in the game.
+        
+        **Connection behavior:**
+        - Keep-alive messages every 30 seconds
+        - Automatic reconnect handling
+        - Connection closed when game ends
+      operationId: subscribeGameEvents
+      parameters:
+        - name: game_id
+          in: path
+          required: true
+          description: Game identifier
+          schema:
+            type: string
+            pattern: '^gam_[a-zA-Z0-9]+$'
+            example: "gam_xyz789"
+        - name: jwt
+          in: cookie
+          required: true
+          description: JWT authentication token
+          schema:
+            type: string
+      responses:
+        '200':
+          description: SSE stream established
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Server-Sent Events stream
+              examples:
+                diceRolled:
+                  summary: Dice rolled event
+                  value: |
+                    event: dice_rolled
+                    data: {"user_id":"usr_alice123","username":"Alice","roll_count":1,"dice":[{"value":3,"locked":false},{"value":5,"locked":false},{"value":2,"locked":false},{"value":3,"locked":false},{"value":1,"locked":false}]}
+
+                diceToggled:
+                  summary: Dice toggled event
+                  value: |
+                    event: dice_toggled
+                    data: {"user_id":"usr_alice123","username":"Alice","dice":[{"value":3,"locked":true},{"value":5,"locked":false},{"value":2,"locked":false},{"value":3,"locked":true},{"value":1,"locked":false}]}
+
+                fieldSelected:
+                  summary: Field selected event
+                  value: |
+                    event: field_selected
+                    data: {"user_id":"usr_alice123","username":"Alice","field":"threes","points":9,"new_total":12}
+
+                turnChanged:
+                  summary: Turn changed event
+                  value: |
+                    event: turn_changed
+                    data: {"current_player_id":"usr_bob456","current_player_username":"Bob"}
+
+                playerInactive:
+                  summary: Player timed out
+                  value: |
+                    event: player_inactive
+                    data: {"user_id":"usr_alice123","username":"Alice","reason":"timeout"}
+
+                playerActive:
+                  summary: Player reconnected
+                  value: |
+                    event: player_active
+                    data: {"user_id":"usr_alice123","username":"Alice"}
+
+                gameEnded:
+                  summary: Game ended event
+                  value: |
+                    event: game_ended
+                    data: {"game_id":"gam_xyz789","rankings":[{"user_id":"usr_alice123","username":"Alice","total_score":234,"rank":1},{"user_id":"usr_bob456","username":"Bob","total_score":187,"rank":2}]}
+
+                keepAlive:
+                  summary: Keep-alive heartbeat
+                  value: |
+                    event: keep_alive
+                    data: {"timestamp":"2025-10-24T10:30:00Z"}
+        '401':
+          description: Authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidToken:
+                  summary: Invalid or expired JWT
+                  value:
+                    error: "unauthorized"
+                    message: "Invalid or expired authentication token"
+        '403':
+          description: Not authorized to access this game
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                notInGame:
+                  summary: User not in game
+                  value:
+                    error: "forbidden"
+                    message: "You are not a player in this game"
+        '404':
+          description: Game not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                gameNotFound:
+                  summary: Game does not exist
+                  value:
+                    error: "game_not_found"
+                    message: "Game not found"
+
+  /internal/publish:
+    post:
+      tags:
+        - Internal
+      summary: Publish event to connections
+      description: |
+        Publishes an event to all SSE connections for a specific lobby or game.
+        Only accessible from other internal services (Lobby Service, Game Service).
+        
+        **Broadcasting logic:**
+        1. Lookup all connections for the given lobby_id or game_id
+        2. Send event to each connection
+        3. Remove broken connections automatically
+        4. Return success/failure count
+        
+        **Event format:**
+        Events are sent as SSE format:
+        ```
+        event: <event_type>
+        data: <json_payload>
+        ```
+      operationId: publishEvent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublishEventRequest'
+            examples:
+              lobbyEvent:
+                summary: Lobby event
+                value:
+                  target_type: "lobby"
+                  target_id: "lby_abc123"
+                  event_type: "player_joined"
+                  data:
+                    user_id: "usr_bob456"
+                    username: "Bob"
+                    player_count: 2
+              gameEvent:
+                summary: Game event
+                value:
+                  target_type: "game"
+                  target_id: "gam_xyz789"
+                  event_type: "dice_rolled"
+                  data:
+                    user_id: "usr_alice123"
+                    username: "Alice"
+                    roll_count: 1
+                    dice:
+                      - value: 3
+                        locked: false
+                      - value: 5
+                        locked: false
+                      - value: 2
+                        locked: false
+                      - value: 3
+                        locked: false
+                      - value: 1
+                        locked: false
+              targetedEvent:
+                summary: Event to specific user
+                value:
+                  target_type: "lobby"
+                  target_id: "lby_abc123"
+                  event_type: "you_were_kicked"
+                  target_user_id: "usr_bob456"
+                  data:
+                    message: "You were removed from the lobby"
+                    kicked_by: "usr_alice123"
+      responses:
+        '200':
+          description: Event published successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishEventResponse'
+              examples:
+                success:
+                  summary: Event delivered to all connections
+                  value:
+                    success: true
+                    connections_found: 3
+                    events_sent: 3
+                    failed_connections: 0
+                partialSuccess:
+                  summary: Some connections failed
+                  value:
+                    success: true
+                    connections_found: 3
+                    events_sent: 2
+                    failed_connections: 1
+                noConnections:
+                  summary: No active connections
+                  value:
+                    success: true
+                    connections_found: 0
+                    events_sent: 0
+                    failed_connections: 0
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: Target lobby/game not found in connection registry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                notFound:
+                  summary: No connections for target
+                  value:
+                    error: "target_not_found"
+                    message: "No active connections for target"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /internal/register:
+    post:
+      tags:
+        - Internal
+      summary: Register lobby/game for SSE
+      description: |
+        Registers a new lobby or game in the SSE connection registry.
+        Called by Lobby Service when creating a new lobby or starting a game.
+        
+        **Purpose:**
+        Pre-creates the connection map entry so connections can be added later.
+        Not strictly necessary (map entry is auto-created on first connection),
+        but helps with explicit lifecycle management.
+      operationId: registerTarget
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterTargetRequest'
+            examples:
+              registerLobby:
+                summary: Register new lobby
+                value:
+                  target_type: "lobby"
+                  target_id: "lby_abc123"
+              registerGame:
+                summary: Register new game
+                value:
+                  target_type: "game"
+                  target_id: "gam_xyz789"
+      responses:
+        '200':
+          description: Target registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+              examples:
+                success:
+                  summary: Registration successful
+                  value:
+                    success: true
+                    message: "Target registered successfully"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: Target already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                alreadyExists:
+                  summary: Already registered
+                  value:
+                    error: "already_exists"
+                    message: "Target is already registered"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /internal/unregister:
+    post:
+      tags:
+        - Internal
+      summary: Unregister lobby/game from SSE
+      description: |
+        Removes a lobby or game from the SSE connection registry.
+        Closes all associated connections.
+        
+        **Use cases:**
+        - Lobby deleted (last player left)
+        - Game ended
+        - Cleanup after error
+        
+        **Actions:**
+        1. Send close event to all connections
+        2. Close all connections
+        3. Remove from registry
+      operationId: unregisterTarget
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnregisterTargetRequest'
+            examples:
+              unregisterLobby:
+                summary: Unregister lobby
+                value:
+                  target_type: "lobby"
+                  target_id: "lby_abc123"
+                  reason: "lobby_deleted"
+              unregisterGame:
+                summary: Unregister game
+                value:
+                  target_type: "game"
+                  target_id: "gam_xyz789"
+                  reason: "game_ended"
+      responses:
+        '200':
+          description: Target unregistered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnregisterTargetResponse'
+              examples:
+                success:
+                  summary: Unregistration successful
+                  value:
+                    success: true
+                    connections_closed: 3
+                    message: "Target unregistered and connections closed"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: Target not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                notFound:
+                  summary: Target not registered
+                  value:
+                    error: "not_found"
+                    message: "Target is not registered"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /internal/connections:
+    get:
+      tags:
+        - Internal
+      summary: Get connection statistics
+      description: |
+        Returns statistics about active SSE connections.
+        
+        **Use cases:**
+        - Monitoring
+        - Debugging
+        - Health checks
+      operationId: getConnectionStats
+      responses:
+        '200':
+          description: Connection statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionStatsResponse'
+              examples:
+                stats:
+                  summary: Current connection stats
+                  value:
+                    total_targets: 5
+                    total_connections: 12
+                    lobbies:
+                      count: 3
+                      connections: 8
+                    games:
+                      count: 2
+                      connections: 4
+                    timestamp: "2025-10-24T10:30:00Z"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /healthcheck:
+    get:
+      tags:
+        - Internal
+      summary: Health check endpoint
+      description: Returns service health status
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              examples:
+                healthy:
+                  summary: Healthy service
+                  value:
+                    status: "ok"
+
+components:
+  schemas:
+    PublishEventRequest:
+      type: object
+      required:
+        - target_type
+        - target_id
+        - event_type
+        - data
+      properties:
+        target_type:
+          type: string
+          enum:
+            - lobby
+            - game
+          description: Type of target (lobby or game)
+          example: "lobby"
+        target_id:
+          type: string
+          description: Target identifier (lobby_id or game_id)
+          example: "lby_abc123"
+        event_type:
+          type: string
+          description: Event type name (sent as SSE event field)
+          example: "player_joined"
+        target_user_id:
+          type: string
+          nullable: true
+          description: If set, only send to this specific user's connection
+          example: "usr_bob456"
+        data:
+          type: object
+          description: Event payload (sent as SSE data field as JSON)
+          additionalProperties: true
+          example:
+            user_id: "usr_bob456"
+            username: "Bob"
+            player_count: 2
+
+    PublishEventResponse:
+      type: object
+      required:
+        - success
+        - connections_found
+        - events_sent
+        - failed_connections
+      properties:
+        success:
+          type: boolean
+          description: Whether operation completed
+          example: true
+        connections_found:
+          type: integer
+          description: Number of connections found for target
+          minimum: 0
+          example: 3
+        events_sent:
+          type: integer
+          description: Number of events successfully sent
+          minimum: 0
+          example: 3
+        failed_connections:
+          type: integer
+          description: Number of connections that failed
+          minimum: 0
+          example: 0
+
+    RegisterTargetRequest:
+      type: object
+      required:
+        - target_type
+        - target_id
+      properties:
+        target_type:
+          type: string
+          enum:
+            - lobby
+            - game
+          description: Type of target
+          example: "lobby"
+        target_id:
+          type: string
+          description: Target identifier
+          example: "lby_abc123"
+
+    UnregisterTargetRequest:
+      type: object
+      required:
+        - target_type
+        - target_id
+      properties:
+        target_type:
+          type: string
+          enum:
+            - lobby
+            - game
+          description: Type of target
+          example: "lobby"
+        target_id:
+          type: string
+          description: Target identifier
+          example: "lby_abc123"
+        reason:
+          type: string
+          description: Reason for unregistration (sent to clients before closing)
+          enum:
+            - lobby_deleted
+            - game_ended
+            - cleanup
+            - error
+          example: "lobby_deleted"
+
+    UnregisterTargetResponse:
+      type: object
+      required:
+        - success
+        - connections_closed
+        - message
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+          description: Operation successful
+        connections_closed:
+          type: integer
+          description: Number of connections closed
+          minimum: 0
+          example: 3
+        message:
+          type: string
+          description: Human-readable success message
+          example: "Target unregistered and connections closed"
+
+    ConnectionStatsResponse:
+      type: object
+      required:
+        - total_targets
+        - total_connections
+        - lobbies
+        - games
+        - timestamp
+      properties:
+        total_targets:
+          type: integer
+          description: Total number of registered targets
+          minimum: 0
+          example: 5
+        total_connections:
+          type: integer
+          description: Total number of active connections
+          minimum: 0
+          example: 12
+        lobbies:
+          type: object
+          required:
+            - count
+            - connections
+          properties:
+            count:
+              type: integer
+              description: Number of registered lobbies
+              minimum: 0
+              example: 3
+            connections:
+              type: integer
+              description: Total connections across all lobbies
+              minimum: 0
+              example: 8
+        games:
+          type: object
+          required:
+            - count
+            - connections
+          properties:
+            count:
+              type: integer
+              description: Number of registered games
+              minimum: 0
+              example: 2
+            connections:
+              type: integer
+              description: Total connections across all games
+              minimum: 0
+              example: 4
+        timestamp:
+          type: string
+          format: date-time
+          description: Current server timestamp
+          example: "2025-10-24T10:30:00Z"
+
+    SuccessResponse:
+      type: object
+      required:
+        - success
+        - message
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+          description: Operation successful
+        message:
+          type: string
+          description: Human-readable success message
+          example: "Operation completed successfully"
+
+    HealthResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+          description: Service health status
+          example: "ok"
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Error code
+          example: "target_not_found"
+        message:
+          type: string
+          description: Human-readable error message
+          example: "No active connections for target"
+        details:
+          type: object
+          description: Additional error details
+          additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            missingField:
+              summary: Missing required field
+              value:
+                error: "invalid_request"
+                message: "Missing required field: target_id"
+            invalidTargetType:
+              summary: Invalid target type
+              value:
+                error: "invalid_request"
+                message: "Invalid target_type - must be 'lobby' or 'game'"
+
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            generic:
+              summary: Generic server error
+              value:
+                error: "internal_error"
+                message: "An unexpected error occurred"
+
+  securitySchemes:
+    JWTCookie:
+      type: apiKey
+      in: cookie
+      name: jwt
+      description: JWT authentication token (HTTP-Only cookie)
+
+security:
+  - JWTCookie: []

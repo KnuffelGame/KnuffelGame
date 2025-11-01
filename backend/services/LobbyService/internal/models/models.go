@@ -36,7 +36,24 @@ type Player struct {
 // Lobby status constants
 const (
 	LobbyStatusWaiting  = "waiting"
-	LobbyStatusInGame   = "in_game"
+	LobbyStatusInGame   = "running"
 	LobbyStatusFinished = "finished"
-	LobbyStatusClosed   = "closed"
 )
+
+// PlayerInfo represents a player in the response with user information
+type PlayerInfo struct {
+	ID       uuid.UUID `json:"id"`
+	UserID   uuid.UUID `json:"user_id"`
+	Username string    `json:"username"`
+	JoinedAt time.Time `json:"joined_at"`
+	IsActive bool      `json:"is_active"`
+}
+
+// CreateLobbyResponse represents the response when creating a lobby
+type CreateLobbyResponse struct {
+	LobbyID  uuid.UUID    `json:"lobby_id"`
+	JoinCode string       `json:"join_code"`
+	LeaderID uuid.UUID    `json:"leader_id"`
+	Status   string       `json:"status"`
+	Players  []PlayerInfo `json:"players"`
+}
