@@ -99,6 +99,46 @@ func TestValidateTokenHandler_Expired(t *testing.T) {
 	}
 }
 
+func TestValidateTokenHandler_InvalidIssuer(t *testing.T) {
+	val := jwt.NewValidator("12345678901234567890123456789012")
+	r := makeRouter(val)
+	claims := jwtlib.MapClaims{"sub": "usr_iss", "name": "Carol", "iat": time.Now().Unix(), "exp": time.Now().Add(24 * time.Hour).Unix(), "iss": "wrong-issuer"}
+	tok := jwtlib.NewWithClaims(jwtlib.SigningMethodHS256, claims)
+	badToken, _ := tok.SignedString([]byte("12345678901234567890123456789012"))
+	body, _ := json.Marshal(map[string]string{"token": badToken})
+	req := httptest.NewRequest(http.MethodPost, "/internal/validate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+	var resp map[string]interface{}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp["valid"] != false || resp["error"] != "invalid issuer" {
+		t.Fatalf("expected invalid issuer, got %+v", resp)
+	}
+}
+
+func TestValidateTokenHandler_MissingClaims(t *testing.T) {
+	val := jwt.NewValidator("12345678901234567890123456789012")
+	r := makeRouter(val)
+	claims := jwtlib.MapClaims{"iat": time.Now().Unix(), "exp": time.Now().Add(24 * time.Hour).Unix(), "iss": jwt.Issuer}
+	tok := jwtlib.NewWithClaims(jwtlib.SigningMethodHS256, claims)
+	badToken, _ := tok.SignedString([]byte("12345678901234567890123456789012"))
+	body, _ := json.Marshal(map[string]string{"token": badToken})
+	req := httptest.NewRequest(http.MethodPost, "/internal/validate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+	var resp map[string]interface{}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp["valid"] != false || resp["error"] != "missing claims" {
+		t.Fatalf("expected missing claims, got %+v", resp)
+	}
+}
+
 func TestValidateTokenHandler_UnknownField(t *testing.T) {
 	gen := jwt.NewGenerator("12345678901234567890123456789012")
 	val := jwt.NewValidator("12345678901234567890123456789012")

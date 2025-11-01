@@ -15,7 +15,7 @@ type ErrorResponse struct {
 
 var (
 	validate       = validator.New()
-	usernameRegex  = regexp.MustCompile(`^(?=.*[A-Za-z0-9])[A-Za-z0-9 ]+$`)
+	usernameRegex  = regexp.MustCompile(`^[A-Za-z0-9 ]+$`)
 	jwtStructRegex = regexp.MustCompile(`^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$`)
 )
 
