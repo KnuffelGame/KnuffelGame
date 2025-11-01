@@ -21,10 +21,10 @@ func makeRouter(val *jwt.Validator) http.Handler {
 }
 
 func TestValidateTokenHandler_Success(t *testing.T) {
-	gen := jwt.NewGenerator("secret")
-	val := jwt.NewValidator("secret")
+	gen := jwt.NewGenerator("12345678901234567890123456789012")
+	val := jwt.NewValidator("12345678901234567890123456789012")
 	r := makeRouter(val)
-	tok, err := gen.CreateToken("usr_valid", "Alice")
+	tok, err := gen.CreateToken("usr_valid", "Alice", true)
 	if err != nil {
 		t.Fatalf("token create error: %v", err)
 	}
@@ -43,15 +43,18 @@ func TestValidateTokenHandler_Success(t *testing.T) {
 }
 
 func TestValidateTokenHandler_InvalidSignature(t *testing.T) {
-	val := jwt.NewValidator("secret")
+	val := jwt.NewValidator("12345678901234567890123456789012")
 	r := makeRouter(val)
-	claims := jwtlib.MapClaims{"sub": "usr_sig", "name": "Mallory", "iat": time.Now().Unix(), "exp": time.Now().Add(24 * time.Hour).Unix(), "iss": "knuffel-auth-service"}
+	claims := jwtlib.MapClaims{"sub": "usr_sig", "name": "Mallory", "iat": time.Now().Unix(), "exp": time.Now().Add(24 * time.Hour).Unix(), "iss": jwt.Issuer}
 	tok := jwtlib.NewWithClaims(jwtlib.SigningMethodHS256, claims)
-	badToken, _ := tok.SignedString([]byte("other"))
+	badToken, _ := tok.SignedString([]byte("otherotherotherotherotherother12"))
 	body, _ := json.Marshal(map[string]string{"token": badToken})
 	req := httptest.NewRequest(http.MethodPost, "/internal/validate", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
 	var resp map[string]interface{}
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 	if resp["valid"] != false || resp["error"] != "invalid signature" {
@@ -60,12 +63,15 @@ func TestValidateTokenHandler_InvalidSignature(t *testing.T) {
 }
 
 func TestValidateTokenHandler_Malformed(t *testing.T) {
-	val := jwt.NewValidator("secret")
+	val := jwt.NewValidator("12345678901234567890123456789012")
 	r := makeRouter(val)
 	body, _ := json.Marshal(map[string]string{"token": "abc"})
 	req := httptest.NewRequest(http.MethodPost, "/internal/validate", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
 	var resp map[string]interface{}
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 	if resp["valid"] != false || resp["error"] != "invalid format" {
@@ -74,16 +80,18 @@ func TestValidateTokenHandler_Malformed(t *testing.T) {
 }
 
 func TestValidateTokenHandler_Expired(t *testing.T) {
-	val := jwt.NewValidator("secret")
+	val := jwt.NewValidator("12345678901234567890123456789012")
 	r := makeRouter(val)
-	claims := jwtlib.MapClaims{"sub": "usr_exp", "name": "Bob", "iat": time.Now().Add(-25 * time.Hour).Unix(), "exp": time.Now().Add(-24 * time.Hour).Unix(), "iss": "knuffel-auth-service"}
+	claims := jwtlib.MapClaims{"sub": "usr_exp", "name": "Bob", "iat": time.Now().Add(-25 * time.Hour).Unix(), "exp": time.Now().Add(-24 * time.Hour).Unix(), "iss": jwt.Issuer}
 	tok := jwtlib.NewWithClaims(jwtlib.SigningMethodHS256, claims)
-	expiredToken, _ := tok.SignedString([]byte("secret"))
+	expiredToken, _ := tok.SignedString([]byte("12345678901234567890123456789012"))
 	body, _ := json.Marshal(map[string]string{"token": expiredToken})
 	req := httptest.NewRequest(http.MethodPost, "/internal/validate", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
-	// allow time to ensure expired condition flagged
 	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
 	var resp map[string]interface{}
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 	if resp["valid"] != false || resp["error"] != "token expired" {
@@ -92,15 +100,18 @@ func TestValidateTokenHandler_Expired(t *testing.T) {
 }
 
 func TestValidateTokenHandler_InvalidIssuer(t *testing.T) {
-	val := jwt.NewValidator("secret")
+	val := jwt.NewValidator("12345678901234567890123456789012")
 	r := makeRouter(val)
 	claims := jwtlib.MapClaims{"sub": "usr_iss", "name": "Carol", "iat": time.Now().Unix(), "exp": time.Now().Add(24 * time.Hour).Unix(), "iss": "wrong-issuer"}
 	tok := jwtlib.NewWithClaims(jwtlib.SigningMethodHS256, claims)
-	badToken, _ := tok.SignedString([]byte("secret"))
+	badToken, _ := tok.SignedString([]byte("12345678901234567890123456789012"))
 	body, _ := json.Marshal(map[string]string{"token": badToken})
 	req := httptest.NewRequest(http.MethodPost, "/internal/validate", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
 	var resp map[string]interface{}
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 	if resp["valid"] != false || resp["error"] != "invalid issuer" {
@@ -109,15 +120,18 @@ func TestValidateTokenHandler_InvalidIssuer(t *testing.T) {
 }
 
 func TestValidateTokenHandler_MissingClaims(t *testing.T) {
-	val := jwt.NewValidator("secret")
+	val := jwt.NewValidator("12345678901234567890123456789012")
 	r := makeRouter(val)
-	claims := jwtlib.MapClaims{"iat": time.Now().Unix(), "exp": time.Now().Add(24 * time.Hour).Unix(), "iss": "knuffel-auth-service"}
+	claims := jwtlib.MapClaims{"iat": time.Now().Unix(), "exp": time.Now().Add(24 * time.Hour).Unix(), "iss": jwt.Issuer}
 	tok := jwtlib.NewWithClaims(jwtlib.SigningMethodHS256, claims)
-	badToken, _ := tok.SignedString([]byte("secret"))
+	badToken, _ := tok.SignedString([]byte("12345678901234567890123456789012"))
 	body, _ := json.Marshal(map[string]string{"token": badToken})
 	req := httptest.NewRequest(http.MethodPost, "/internal/validate", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
 	var resp map[string]interface{}
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 	if resp["valid"] != false || resp["error"] != "missing claims" {
@@ -125,27 +139,24 @@ func TestValidateTokenHandler_MissingClaims(t *testing.T) {
 	}
 }
 
-func TestValidateTokenHandler_EmptyTokenField(t *testing.T) {
-	val := jwt.NewValidator("secret")
+func TestValidateTokenHandler_UnknownField(t *testing.T) {
+	gen := jwt.NewGenerator("12345678901234567890123456789012")
+	val := jwt.NewValidator("12345678901234567890123456789012")
 	r := makeRouter(val)
-	body, _ := json.Marshal(map[string]string{"token": ""})
+	tok, err := gen.CreateToken("usr_extra", "Alice", true)
+	if err != nil {
+		t.Fatalf("token create error: %v", err)
+	}
+	body, _ := json.Marshal(map[string]interface{}{"token": tok, "unexpected": "x"})
 	req := httptest.NewRequest(http.MethodPost, "/internal/validate", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
 	}
-}
-
-func TestValidateTokenHandler_InvalidJSON(t *testing.T) {
-	val := jwt.NewValidator("secret")
-	r := makeRouter(val)
-	// invalid JSON (missing quote)
-	body := []byte(`{"token": invalid}`)
-	req := httptest.NewRequest(http.MethodPost, "/internal/validate", bytes.NewReader(body))
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", rec.Code)
+	var resp map[string]interface{}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp["error"] != "invalid_request" {
+		t.Fatalf("expected invalid_request error, got %+v", resp)
 	}
 }

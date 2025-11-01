@@ -22,7 +22,7 @@ func main() {
 	gen := jwt.NewGenerator(cfg.JWTSecret)
 	val := jwt.NewValidator(cfg.JWTSecret)
 	if cfg.JWTSecret == "" {
-		log.Warn("JWT_SECRET is empty; token generation & validation will fail")
+		log.Warn("JWT_SECRET is empty; token operations will fail")
 	}
 
 	r := router.New(gen, val)

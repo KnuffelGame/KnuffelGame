@@ -9,10 +9,10 @@ import (
 )
 
 func TestCreateToken(t *testing.T) {
-	os.Setenv("JWT_SECRET", "test-secret")
+	os.Setenv("JWT_SECRET", "12345678901234567890123456789012abcdefgh")
 	gen := NewGenerator("")
 
-	tokenStr, err := gen.CreateToken("usr_test123", "Alice")
+	tokenStr, err := gen.CreateToken("usr_test123", "Alice", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -24,7 +24,7 @@ func TestCreateToken(t *testing.T) {
 		if token.Method.Alg() != jwtlib.SigningMethodHS256.Alg() {
 			t.Fatalf("unexpected signing method: %s", token.Method.Alg())
 		}
-		return []byte("test-secret"), nil
+		return []byte("12345678901234567890123456789012abcdefgh"), nil
 	})
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
@@ -40,10 +40,12 @@ func TestCreateToken(t *testing.T) {
 	if claims["name"] != "Alice" {
 		t.Errorf("expected name Alice, got %v", claims["name"])
 	}
-	if claims["iss"] != "knuffel-auth-service" {
-		t.Errorf("expected iss knuffel-auth-service, got %v", claims["iss"])
+	if claims["iss"] != Issuer {
+		t.Errorf("expected iss %s, got %v", Issuer, claims["iss"])
 	}
-	// exp should be ~24h from iat
+	if claims["guest"] != true {
+		t.Errorf("expected guest true, got %v", claims["guest"])
+	}
 	_iat, ok1 := claims["iat"].(float64)
 	_exp, ok2 := claims["exp"].(float64)
 	if !ok1 || !ok2 {
