@@ -4,7 +4,22 @@ This directory contains SQL migrations for the Lobby Service database.
 
 ## Migration Tool
 
-We use [Goose](https://github.com/pressly/goose) for database migrations. Migrations are automatically run on application startup.
+We use [Goose](https://github.com/pressly/goose) for database migrations. Migrations are **embedded into the binary** using Go's `embed` package and automatically run on application startup.
+
+## Embedded Migrations
+
+The migration files are bundled directly into the compiled binary, eliminating the need to deploy migration files separately. This ensures:
+
+- The binary is self-contained and portable
+- Migrations are version-locked with the application code
+- No external file dependencies at runtime
+
+The embedding is done in `internal/db/migrations.go` using:
+
+```go
+//go:embed migrations/*.sql
+var embedMigrations embed.FS
+```
 
 ## Migration Files
 
@@ -68,14 +83,17 @@ To manually manage migrations (for development/debugging), you can use the goose
 # Install goose CLI
 go install github.com/pressly/goose/v3/cmd/goose@latest
 
+# Navigate to the migrations directory
+cd internal/db/migrations
+
 # Run migrations up
-goose -dir migrations postgres "host=localhost port=5432 user=lobby password=secure dbname=lobby sslmode=disable" up
+goose postgres "host=localhost port=5432 user=lobby password=secure dbname=lobby sslmode=disable" up
 
 # Check migration status
-goose -dir migrations postgres "host=localhost port=5432 user=lobby password=secure dbname=lobby sslmode=disable" status
+goose postgres "host=localhost port=5432 user=lobby password=secure dbname=lobby sslmode=disable" status
 
 # Rollback last migration
-goose -dir migrations postgres "host=localhost port=5432 user=lobby password=secure dbname=lobby sslmode=disable" down
+goose postgres "host=localhost port=5432 user=lobby password=secure dbname=lobby sslmode=disable" down
 ```
 
 ## Creating New Migrations
@@ -83,11 +101,13 @@ goose -dir migrations postgres "host=localhost port=5432 user=lobby password=sec
 To create a new migration:
 
 ```bash
-cd migrations
+cd internal/db/migrations
 goose create <migration_name> sql
 ```
 
 This will create a new timestamped migration file. Edit the file to add your SQL statements in the `-- +goose Up` and `-- +goose Down` sections.
+
+**Note**: After adding new migration files, rebuild the binary to include them in the embedded filesystem.
 
 ## Environment Variables
 

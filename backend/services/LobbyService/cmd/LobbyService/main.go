@@ -38,8 +38,7 @@ func main() {
 	defer dbConn.Close()
 
 	// Run database migrations
-	migrationsDir := "./migrations"
-	if err := db.RunMigrations(dbConn.DB, migrationsDir); err != nil {
+	if err := db.RunMigrations(dbConn.DB); err != nil {
 		log.Error("failed to run migrations", slog.String("error", err.Error()))
 		os.Exit(1)
 	}

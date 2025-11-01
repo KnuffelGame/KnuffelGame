@@ -2,19 +2,25 @@ package db
 
 import (
 	"database/sql"
+	"embed"
 	"fmt"
 	"log/slog"
 
 	"github.com/pressly/goose/v3"
 )
 
-// RunMigrations runs all pending database migrations from the specified directory
-func RunMigrations(db *sql.DB, migrationsDir string) error {
+//go:embed migrations/*.sql
+var embedMigrations embed.FS
+
+// RunMigrations runs all pending database migrations from the embedded filesystem
+func RunMigrations(db *sql.DB) error {
 	if err := goose.SetDialect("postgres"); err != nil {
 		return fmt.Errorf("failed to set goose dialect: %w", err)
 	}
 
-	if err := goose.Up(db, migrationsDir); err != nil {
+	goose.SetBaseFS(embedMigrations)
+
+	if err := goose.Up(db, "migrations"); err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
 
@@ -23,10 +29,12 @@ func RunMigrations(db *sql.DB, migrationsDir string) error {
 }
 
 // GetMigrationStatus returns the current migration status
-func GetMigrationStatus(db *sql.DB, migrationsDir string) error {
+func GetMigrationStatus(db *sql.DB) error {
 	if err := goose.SetDialect("postgres"); err != nil {
 		return fmt.Errorf("failed to set goose dialect: %w", err)
 	}
 
-	return goose.Status(db, migrationsDir)
+	goose.SetBaseFS(embedMigrations)
+
+	return goose.Status(db, "migrations")
 }
