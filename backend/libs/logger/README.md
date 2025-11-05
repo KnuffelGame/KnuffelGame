@@ -88,5 +88,3 @@ Calling `logger.New()` also sets / updates the package global returned by `logge
 ## Notes on color mode
 When `LOG_COLOR` (or `WithColor(true)`) is enabled, the JSON line is wrapped with ANSI escape codes. Some log collectors may need to strip these codes to parse JSON correctly.
 
-## License
-MIT (inherited project policy)

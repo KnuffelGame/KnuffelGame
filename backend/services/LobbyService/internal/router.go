@@ -1,18 +1,19 @@
 package router
 
 import (
-	"database/sql"
 	"net/http"
 
+	"github.com/KnuffelGame/KnuffelGame/backend/libs/auth"
 	"github.com/KnuffelGame/KnuffelGame/backend/libs/healthcheck"
 	"github.com/KnuffelGame/KnuffelGame/backend/libs/logger"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/LobbyService/internal/handlers"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/LobbyService/internal/joincode"
+	"github.com/KnuffelGame/KnuffelGame/backend/services/LobbyService/internal/repository"
 	"github.com/go-chi/chi/v5"
 )
 
-// New constructs the HTTP router with database and join code generator dependencies
-func New(db *sql.DB, codeGen *joincode.Generator) http.Handler {
+// New constructs the HTTP router with repository and join code generator dependencies
+func New(repo repository.Repository, codeGen *joincode.Generator) http.Handler {
 	r := chi.NewRouter()
 	// replace chi default logger with structured slog based middleware
 	l := logger.Default()
@@ -21,8 +22,20 @@ func New(db *sql.DB, codeGen *joincode.Generator) http.Handler {
 	// Healthcheck
 	healthcheck.Mount(r)
 
-	// Lobby endpoints
-	r.Post("/lobbies", handlers.CreateLobbyHandler(db, codeGen))
+	// Lobby endpoints grouped under auth middleware
+	r.Route("/lobbies", func(r chi.Router) {
+		// Authentication middleware (reads X-User-ID / X-Username and injects user into context)
+		r.Use(auth.AuthMiddleware)
+
+		// Create lobby (any authenticated user)
+		r.Post("/", handlers.CreateLobbyHandler(repo, codeGen))
+
+		// Get lobby details - require membership
+		r.With(handlers.RequireLobbyMember(repo)).Get("/{lobby_id}", handlers.GetLobbyHandler(repo))
+
+		// Other lobby routes can use RequireLobbyMember or RequireLobbyLeader as appropriate
+		// e.g. r.With(handlers.RequireLobbyLeader(repo)).Post("/{lobby_id}/start", handlers.StartLobbyHandler(db))
+	})
 
 	return r
 }
