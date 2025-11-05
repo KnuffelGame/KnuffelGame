@@ -10,7 +10,6 @@ import (
 )
 
 // Repository defines database operations required by the Lobby service.
-// Extracted to its own file so multiple implementations can be added easily.
 type Repository interface {
 	BeginTx(ctx context.Context) (*sql.Tx, error)
 	CreateUserIfNotExistsTx(tx *sql.Tx, userID uuid.UUID, username string) error
