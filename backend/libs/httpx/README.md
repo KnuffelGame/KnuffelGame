@@ -202,10 +202,6 @@ func HandleCreateToken(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-## License
-
-Internal library for KnuffelGame project.
-
 ## Version
 
 v0.0.0 - November 2025

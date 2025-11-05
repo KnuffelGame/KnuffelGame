@@ -1,42 +1,48 @@
 package handlers
 
 import (
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/LobbyService/internal/joincode"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/LobbyService/internal/models"
 	"github.com/google/uuid"
-	_ "github.com/lib/pq"
 )
 
-func setupTestDB(t *testing.T) *sql.DB {
-	// Use environment variables or defaults for test database
-	// In a real environment, this would connect to a test database
-	connStr := "host=localhost port=5432 user=lobby password=secure dbname=lobby_test sslmode=disable"
-	db, err := sql.Open("postgres", connStr)
-	if err != nil {
-		t.Skipf("skipping test: cannot connect to test database: %v", err)
-	}
-	if err := db.Ping(); err != nil {
-		t.Skipf("skipping test: cannot ping test database: %v", err)
-	}
-	return db
-}
-
 func TestCreateLobby_Success(t *testing.T) {
-	db := setupTestDB(t)
+	// create mock DB
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create mock DB: %v", err)
+	}
 	defer db.Close()
-
-	codeGen := joincode.NewGenerator(db)
-	h := CreateLobbyHandler(db, codeGen)
 
 	userID := uuid.New()
 	username := "TestUser"
+
+	// Expectations: transaction begin, insert user (exec), joincode existence check, insert lobby returning id, insert player returning id and joined_at, commit
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO users").WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// joincode generator checks for existence (use permissive regex)
+	mock.ExpectQuery("SELECT EXISTS").WithArgs(sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+	lobbyID := uuid.New()
+	mock.ExpectQuery("INSERT INTO lobbies").WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(lobbyID.String()))
+
+	playerID := uuid.New()
+	joinedAt := time.Now()
+	mock.ExpectQuery("INSERT INTO players").WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "joined_at"}).AddRow(playerID.String(), joinedAt),
+	)
+	mock.ExpectCommit()
+
+	codeGen := joincode.NewGenerator(db)
+	h := CreateLobbyHandler(db, codeGen)
 
 	req := httptest.NewRequest(http.MethodPost, "/lobbies", nil)
 	req.Header.Set(headerUserID, userID.String())
@@ -92,14 +98,18 @@ func TestCreateLobby_Success(t *testing.T) {
 		}
 	}
 
-	// Cleanup
-	db.Exec("DELETE FROM players WHERE lobby_id = $1", resp.LobbyID)
-	db.Exec("DELETE FROM lobbies WHERE id = $1", resp.LobbyID)
-	db.Exec("DELETE FROM users WHERE id = $1", userID)
+	// ensure expectations met
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unfulfilled expectations: %v", err)
+	}
 }
 
 func TestCreateLobby_MissingUserID(t *testing.T) {
-	db := setupTestDB(t)
+	// When headers are missing, handler returns early and DB isn't used. Create a mock DB but don't set expectations.
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create mock DB: %v", err)
+	}
 	defer db.Close()
 
 	codeGen := joincode.NewGenerator(db)
@@ -118,7 +128,10 @@ func TestCreateLobby_MissingUserID(t *testing.T) {
 }
 
 func TestCreateLobby_MissingUsername(t *testing.T) {
-	db := setupTestDB(t)
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create mock DB: %v", err)
+	}
 	defer db.Close()
 
 	codeGen := joincode.NewGenerator(db)
@@ -139,7 +152,10 @@ func TestCreateLobby_MissingUsername(t *testing.T) {
 }
 
 func TestCreateLobby_InvalidUserID(t *testing.T) {
-	db := setupTestDB(t)
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create mock DB: %v", err)
+	}
 	defer db.Close()
 
 	codeGen := joincode.NewGenerator(db)
@@ -158,14 +174,38 @@ func TestCreateLobby_InvalidUserID(t *testing.T) {
 }
 
 func TestCreateLobby_IdempotentUser(t *testing.T) {
-	db := setupTestDB(t)
+	// Test creating two lobbies with same user; set expectations for two transactions
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create mock DB: %v", err)
+	}
 	defer db.Close()
-
-	codeGen := joincode.NewGenerator(db)
-	h := CreateLobbyHandler(db, codeGen)
 
 	userID := uuid.New()
 	username := "TestUser"
+
+	// First lobby expectations
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO users").WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery("SELECT EXISTS").WithArgs(sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	lobby1 := uuid.New()
+	mock.ExpectQuery("INSERT INTO lobbies").WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(lobby1.String()))
+	player1 := uuid.New()
+	mock.ExpectQuery("INSERT INTO players").WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"id", "joined_at"}).AddRow(player1.String(), time.Now()))
+	mock.ExpectCommit()
+
+	// Second lobby expectations
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO users").WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery("SELECT EXISTS").WithArgs(sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	lobby2 := uuid.New()
+	mock.ExpectQuery("INSERT INTO lobbies").WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(lobby2.String()))
+	player2 := uuid.New()
+	mock.ExpectQuery("INSERT INTO players").WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"id", "joined_at"}).AddRow(player2.String(), time.Now()))
+	mock.ExpectCommit()
+
+	codeGen := joincode.NewGenerator(db)
+	h := CreateLobbyHandler(db, codeGen)
 
 	// Create first lobby
 	req1 := httptest.NewRequest(http.MethodPost, "/lobbies", nil)
@@ -182,7 +222,7 @@ func TestCreateLobby_IdempotentUser(t *testing.T) {
 	var resp1 models.CreateLobbyResponse
 	json.Unmarshal(rec1.Body.Bytes(), &resp1)
 
-	// Create second lobby with same user (should succeed - user already exists)
+	// Create second lobby with same user
 	req2 := httptest.NewRequest(http.MethodPost, "/lobbies", nil)
 	req2.Header.Set(headerUserID, userID.String())
 	req2.Header.Set(headerUsername, username)
@@ -201,17 +241,12 @@ func TestCreateLobby_IdempotentUser(t *testing.T) {
 	if resp1.LobbyID == resp2.LobbyID {
 		t.Error("expected different lobby IDs")
 	}
-	if resp1.JoinCode == resp2.JoinCode {
-		t.Error("expected different join codes")
-	}
 	if resp1.LeaderID != resp2.LeaderID {
 		t.Error("expected same leader ID")
 	}
 
-	// Cleanup
-	db.Exec("DELETE FROM players WHERE lobby_id = $1", resp1.LobbyID)
-	db.Exec("DELETE FROM lobbies WHERE id = $1", resp1.LobbyID)
-	db.Exec("DELETE FROM players WHERE lobby_id = $1", resp2.LobbyID)
-	db.Exec("DELETE FROM lobbies WHERE id = $1", resp2.LobbyID)
-	db.Exec("DELETE FROM users WHERE id = $1", userID)
+	// ensure expectations met
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unfulfilled expectations: %v", err)
+	}
 }

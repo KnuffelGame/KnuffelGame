@@ -57,3 +57,13 @@ type CreateLobbyResponse struct {
 	Status   string       `json:"status"`
 	Players  []PlayerInfo `json:"players"`
 }
+
+// LobbyDetailResponse represents the response when getting lobby details
+// Same structure as CreateLobbyResponse
+type LobbyDetailResponse struct {
+	LobbyID  uuid.UUID    `json:"lobby_id"`
+	JoinCode string       `json:"join_code"`
+	Status   string       `json:"status"`
+	LeaderID uuid.UUID    `json:"leader_id"`
+	Players  []PlayerInfo `json:"players"`
+}
