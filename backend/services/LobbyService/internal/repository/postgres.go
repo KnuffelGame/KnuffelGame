@@ -175,3 +175,85 @@ func (r *PostgresRepository) IsMember(ctx context.Context, lobbyID uuid.UUID, us
 	}
 	return exists, nil
 }
+
+func (r *PostgresRepository) GetLobbyByJoinCode(ctx context.Context, joinCode string) (*models.Lobby, error) {
+	var lobby models.Lobby
+	err := r.DB.QueryRowContext(ctx, `
+		SELECT id, join_code, leader_id, status, created_at, updated_at
+		FROM lobbies
+		WHERE join_code = $1
+	`, joinCode).Scan(
+		&lobby.ID,
+		&lobby.JoinCode,
+		&lobby.LeaderID,
+		&lobby.Status,
+		&lobby.CreatedAt,
+		&lobby.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, err
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &lobby, nil
+}
+
+func (r *PostgresRepository) GetLobbyPlayerCount(ctx context.Context, lobbyID uuid.UUID) (int, error) {
+	var count int
+	err := r.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM players
+		WHERE lobby_id = $1 AND is_active = true
+	`, lobbyID).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// Transaction-based versions for join lobby functionality
+func (r *PostgresRepository) GetLobbyByJoinCodeTx(tx *sql.Tx, joinCode string) (*models.Lobby, error) {
+	var lobby models.Lobby
+	err := tx.QueryRow(`
+		SELECT id, join_code, leader_id, status, created_at, updated_at
+		FROM lobbies
+		WHERE join_code = $1
+	`, joinCode).Scan(
+		&lobby.ID,
+		&lobby.JoinCode,
+		&lobby.LeaderID,
+		&lobby.Status,
+		&lobby.CreatedAt,
+		&lobby.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, err
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &lobby, nil
+}
+
+func (r *PostgresRepository) GetLobbyPlayerCountTx(tx *sql.Tx, lobbyID uuid.UUID) (int, error) {
+	var count int
+	err := tx.QueryRow(`
+		SELECT COUNT(*)
+		FROM players
+		WHERE lobby_id = $1 AND is_active = true
+	`, lobbyID).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (r *PostgresRepository) IsMemberTx(tx *sql.Tx, lobbyID uuid.UUID, userID uuid.UUID) (bool, error) {
+	var exists bool
+	err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM players WHERE lobby_id = $1 AND user_id = $2)`, lobbyID, userID).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}

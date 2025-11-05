@@ -30,6 +30,9 @@ func New(repo repository.Repository, codeGen *joincode.Generator) http.Handler {
 		// Create lobby (any authenticated user)
 		r.Post("/", handlers.CreateLobbyHandler(repo, codeGen))
 
+		// Join lobby (any authenticated user)
+		r.Post("/join", handlers.JoinLobbyHandler(repo))
+
 		// Get lobby details - require membership
 		r.With(handlers.RequireLobbyMember(repo)).Get("/{lobby_id}", handlers.GetLobbyHandler(repo))
 
