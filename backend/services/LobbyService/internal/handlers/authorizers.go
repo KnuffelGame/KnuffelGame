@@ -2,17 +2,19 @@ package handlers
 
 import (
 	"database/sql"
+	"log/slog"
 	"net/http"
 
 	"github.com/KnuffelGame/KnuffelGame/backend/libs/auth"
 	"github.com/KnuffelGame/KnuffelGame/backend/libs/httpx"
 	"github.com/KnuffelGame/KnuffelGame/backend/libs/logger"
+	"github.com/KnuffelGame/KnuffelGame/backend/services/LobbyService/internal/repository"
 	"github.com/go-chi/chi/v5"
-	"log/slog"
+	"github.com/google/uuid"
 )
 
 // RequireLobbyMember returns a middleware that ensures the requesting user is a member of the lobby (or the leader).
-func RequireLobbyMember(db *sql.DB) func(http.Handler) http.Handler {
+func RequireLobbyMember(repo repository.Repository) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			log := logger.Logger(r.Context()).WithGroup("middleware").With(slog.String("action", "require_lobby_member"))
@@ -33,9 +35,15 @@ func RequireLobbyMember(db *sql.DB) func(http.Handler) http.Handler {
 				return
 			}
 
+			lobbyID, err := uuid.Parse(lobbyIDStr)
+			if err != nil {
+				log.Warn("invalid lobby_id format", slog.String("lobby_id", lobbyIDStr), slog.String("error", err.Error()))
+				httpx.WriteBadRequest(w, "Invalid lobby ID format", map[string]interface{}{"detail": err.Error()}, log)
+				return
+			}
+
 			// First check if user is the leader
-			var leaderID string
-			err := db.QueryRow(`SELECT leader_id::text FROM lobbies WHERE id = $1`, lobbyIDStr).Scan(&leaderID)
+			leaderID, err := repo.GetLobbyLeaderID(r.Context(), lobbyID)
 			if err == sql.ErrNoRows {
 				log.Info("lobby not found", slog.String("lobby_id", lobbyIDStr))
 				httpx.WriteNotFound(w, "Lobby not found", log)
@@ -47,14 +55,13 @@ func RequireLobbyMember(db *sql.DB) func(http.Handler) http.Handler {
 				return
 			}
 
-			if leaderID == user.ID.String() {
+			if leaderID == user.ID {
 				next.ServeHTTP(w, r)
 				return
 			}
 
 			// Check membership
-			var exists bool
-			err = db.QueryRow(`SELECT EXISTS(SELECT 1 FROM players WHERE lobby_id = $1 AND user_id = $2)`, lobbyIDStr, user.ID).Scan(&exists)
+			exists, err := repo.IsMember(r.Context(), lobbyID, user.ID)
 			if err != nil {
 				log.Error("failed to query membership", slog.String("error", err.Error()))
 				httpx.WriteInternalError(w, "Database error", nil, log)
@@ -73,7 +80,7 @@ func RequireLobbyMember(db *sql.DB) func(http.Handler) http.Handler {
 }
 
 // RequireLobbyLeader returns a middleware that ensures the requesting user is the lobby leader.
-func RequireLobbyLeader(db *sql.DB) func(http.Handler) http.Handler {
+func RequireLobbyLeader(repo repository.Repository) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			log := logger.Logger(r.Context()).WithGroup("middleware").With(slog.String("action", "require_lobby_leader"))
@@ -92,8 +99,14 @@ func RequireLobbyLeader(db *sql.DB) func(http.Handler) http.Handler {
 				return
 			}
 
-			var leaderID string
-			err := db.QueryRow(`SELECT leader_id::text FROM lobbies WHERE id = $1`, lobbyIDStr).Scan(&leaderID)
+			lobbyID, err := uuid.Parse(lobbyIDStr)
+			if err != nil {
+				log.Warn("invalid lobby_id format", slog.String("lobby_id", lobbyIDStr), slog.String("error", err.Error()))
+				httpx.WriteBadRequest(w, "Invalid lobby ID format", map[string]interface{}{"detail": err.Error()}, log)
+				return
+			}
+
+			leaderID, err := repo.GetLobbyLeaderID(r.Context(), lobbyID)
 			if err == sql.ErrNoRows {
 				log.Info("lobby not found", slog.String("lobby_id", lobbyIDStr))
 				httpx.WriteNotFound(w, "Lobby not found", log)
@@ -105,7 +118,7 @@ func RequireLobbyLeader(db *sql.DB) func(http.Handler) http.Handler {
 				return
 			}
 
-			if leaderID != user.ID.String() {
+			if leaderID != user.ID {
 				log.Warn("user is not the leader", slog.String("lobby_id", lobbyIDStr), slog.String("user_id", user.ID.String()))
 				httpx.WriteForbidden(w, "User is not the lobby leader", log)
 				return

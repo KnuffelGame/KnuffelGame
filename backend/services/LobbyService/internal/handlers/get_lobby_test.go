@@ -10,6 +10,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/LobbyService/internal/models"
+	"github.com/KnuffelGame/KnuffelGame/backend/services/LobbyService/internal/repository"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
@@ -49,7 +50,7 @@ func TestGetLobby_Success(t *testing.T) {
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
 	rec := httptest.NewRecorder()
-	handler := GetLobbyHandler(db)
+	handler := GetLobbyHandler(repository.New(db))
 	handler(rec, req)
 
 	// Verify response
@@ -134,7 +135,7 @@ func TestGetLobby_MultiplePlayersLeaderIdentified(t *testing.T) {
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
 	rec := httptest.NewRecorder()
-	handler := GetLobbyHandler(db)
+	handler := GetLobbyHandler(repository.New(db))
 	handler(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -199,7 +200,7 @@ func TestGetLobby_WithInactivePlayers(t *testing.T) {
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
 	rec := httptest.NewRecorder()
-	handler := GetLobbyHandler(db)
+	handler := GetLobbyHandler(repository.New(db))
 	handler(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -267,7 +268,7 @@ func TestGetLobby_NotFound(t *testing.T) {
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
 	rec := httptest.NewRecorder()
-	handler := GetLobbyHandler(db)
+	handler := GetLobbyHandler(repository.New(db))
 	handler(rec, req)
 
 	if rec.Code != http.StatusNotFound {
@@ -298,7 +299,7 @@ func TestGetLobby_MissingHeaders(t *testing.T) {
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
 	rec := httptest.NewRecorder()
-	handler := GetLobbyHandler(db)
+	handler := GetLobbyHandler(repository.New(db))
 	handler(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -326,7 +327,7 @@ func TestGetLobby_InvalidLobbyID(t *testing.T) {
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
 	rec := httptest.NewRecorder()
-	handler := GetLobbyHandler(db)
+	handler := GetLobbyHandler(repository.New(db))
 	handler(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -353,7 +354,7 @@ func TestGetLobby_InvalidUserID(t *testing.T) {
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
 	rec := httptest.NewRecorder()
-	handler := GetLobbyHandler(db)
+	handler := GetLobbyHandler(repository.New(db))
 	handler(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -388,7 +389,7 @@ func TestGetLobby_ForbiddenForNonMember(t *testing.T) {
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
 	rec := httptest.NewRecorder()
-	handler := GetLobbyHandler(db)
+	handler := GetLobbyHandler(repository.New(db))
 	handler(rec, req)
 
 	if rec.Code != http.StatusForbidden {

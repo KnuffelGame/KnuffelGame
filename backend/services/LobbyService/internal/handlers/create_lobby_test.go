@@ -10,6 +10,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/LobbyService/internal/joincode"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/LobbyService/internal/models"
+	"github.com/KnuffelGame/KnuffelGame/backend/services/LobbyService/internal/repository"
 	"github.com/google/uuid"
 )
 
@@ -42,7 +43,7 @@ func TestCreateLobby_Success(t *testing.T) {
 	mock.ExpectCommit()
 
 	codeGen := joincode.NewGenerator(db)
-	h := CreateLobbyHandler(db, codeGen)
+	h := CreateLobbyHandler(repository.New(db), codeGen)
 
 	req := httptest.NewRequest(http.MethodPost, "/lobbies", nil)
 	req.Header.Set(headerUserID, userID.String())
@@ -113,7 +114,7 @@ func TestCreateLobby_MissingUserID(t *testing.T) {
 	defer db.Close()
 
 	codeGen := joincode.NewGenerator(db)
-	h := CreateLobbyHandler(db, codeGen)
+	h := CreateLobbyHandler(repository.New(db), codeGen)
 
 	req := httptest.NewRequest(http.MethodPost, "/lobbies", nil)
 	req.Header.Set(headerUsername, "TestUser")
@@ -135,7 +136,7 @@ func TestCreateLobby_MissingUsername(t *testing.T) {
 	defer db.Close()
 
 	codeGen := joincode.NewGenerator(db)
-	h := CreateLobbyHandler(db, codeGen)
+	h := CreateLobbyHandler(repository.New(db), codeGen)
 
 	userID := uuid.New()
 
@@ -159,7 +160,7 @@ func TestCreateLobby_InvalidUserID(t *testing.T) {
 	defer db.Close()
 
 	codeGen := joincode.NewGenerator(db)
-	h := CreateLobbyHandler(db, codeGen)
+	h := CreateLobbyHandler(repository.New(db), codeGen)
 
 	req := httptest.NewRequest(http.MethodPost, "/lobbies", nil)
 	req.Header.Set(headerUserID, "not-a-uuid")
@@ -205,7 +206,7 @@ func TestCreateLobby_IdempotentUser(t *testing.T) {
 	mock.ExpectCommit()
 
 	codeGen := joincode.NewGenerator(db)
-	h := CreateLobbyHandler(db, codeGen)
+	h := CreateLobbyHandler(repository.New(db), codeGen)
 
 	// Create first lobby
 	req1 := httptest.NewRequest(http.MethodPost, "/lobbies", nil)

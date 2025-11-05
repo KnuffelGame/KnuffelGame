@@ -1,15 +1,14 @@
 package handlers
 
 import (
-	"database/sql"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/KnuffelGame/KnuffelGame/backend/libs/httpx"
 	"github.com/KnuffelGame/KnuffelGame/backend/libs/logger"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/LobbyService/internal/joincode"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/LobbyService/internal/models"
+	"github.com/KnuffelGame/KnuffelGame/backend/services/LobbyService/internal/repository"
 	"github.com/google/uuid"
 )
 
@@ -21,7 +20,7 @@ const (
 // CreateLobbyHandler returns an http.HandlerFunc that creates a new lobby
 // Headers required: X-User-ID, X-Username (from Gateway)
 // Creates user if not exists, generates join code, sets user as leader, adds user as first player
-func CreateLobbyHandler(db *sql.DB, codeGen *joincode.Generator) http.HandlerFunc {
+func CreateLobbyHandler(repo repository.Repository, codeGen *joincode.Generator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		log := logger.Logger(r.Context()).WithGroup("handler").With(slog.String("action", "create_lobby"))
 
@@ -42,8 +41,8 @@ func CreateLobbyHandler(db *sql.DB, codeGen *joincode.Generator) http.HandlerFun
 			return
 		}
 
-		// Begin transaction
-		tx, err := db.Begin()
+		// Begin transaction via repository
+		tx, err := repo.BeginTx(r.Context())
 		if err != nil {
 			log.Error("failed to begin transaction", slog.String("error", err.Error()))
 			httpx.WriteInternalError(w, "Database error", nil, log)
@@ -52,12 +51,7 @@ func CreateLobbyHandler(db *sql.DB, codeGen *joincode.Generator) http.HandlerFun
 		defer tx.Rollback()
 
 		// 1. Create or get user (ON CONFLICT DO NOTHING)
-		_, err = tx.Exec(`
-			INSERT INTO users (id, username)
-			VALUES ($1, $2)
-			ON CONFLICT (id) DO NOTHING
-		`, userID, username)
-		if err != nil {
+		if err := repo.CreateUserIfNotExistsTx(tx, userID, username); err != nil {
 			log.Error("failed to insert user", slog.String("error", err.Error()), slog.String("user_id", userID.String()))
 			httpx.WriteInternalError(w, "Failed to create user", nil, log)
 			return
@@ -72,12 +66,7 @@ func CreateLobbyHandler(db *sql.DB, codeGen *joincode.Generator) http.HandlerFun
 		}
 
 		// 3. Create lobby with user as leader
-		var lobbyID uuid.UUID
-		err = tx.QueryRow(`
-			INSERT INTO lobbies (join_code, leader_id, status)
-			VALUES ($1, $2, $3)
-			RETURNING id
-		`, joinCode, userID, models.LobbyStatusWaiting).Scan(&lobbyID)
+		lobbyID, err := repo.CreateLobbyTx(tx, joinCode, userID)
 		if err != nil {
 			log.Error("failed to create lobby", slog.String("error", err.Error()))
 			httpx.WriteInternalError(w, "Failed to create lobby", nil, log)
@@ -85,13 +74,7 @@ func CreateLobbyHandler(db *sql.DB, codeGen *joincode.Generator) http.HandlerFun
 		}
 
 		// 4. Add user as first player in the lobby
-		var playerID uuid.UUID
-		var joinedAt time.Time
-		err = tx.QueryRow(`
-		INSERT INTO players (lobby_id, user_id, is_active)
-		VALUES ($1, $2, true)
-		RETURNING id, joined_at
-	`, lobbyID, userID).Scan(&playerID, &joinedAt)
+		playerID, joinedAt, err := repo.AddPlayerTx(tx, lobbyID, userID)
 		if err != nil {
 			log.Error("failed to add player to lobby", slog.String("error", err.Error()))
 			httpx.WriteInternalError(w, "Failed to add player to lobby", nil, log)
