@@ -25,4 +25,7 @@ type Repository interface {
 	GetLobbyByJoinCodeTx(tx *sql.Tx, joinCode string) (*models.Lobby, error)
 	GetLobbyPlayerCountTx(tx *sql.Tx, lobbyID uuid.UUID) (int, error)
 	IsMemberTx(tx *sql.Tx, lobbyID uuid.UUID, userID uuid.UUID) (bool, error)
+
+	// Kick player functionality
+	KickPlayerTx(tx *sql.Tx, lobbyID uuid.UUID, targetUserID uuid.UUID) error
 }

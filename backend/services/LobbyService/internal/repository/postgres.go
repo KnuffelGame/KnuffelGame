@@ -251,9 +251,18 @@ func (r *PostgresRepository) GetLobbyPlayerCountTx(tx *sql.Tx, lobbyID uuid.UUID
 
 func (r *PostgresRepository) IsMemberTx(tx *sql.Tx, lobbyID uuid.UUID, userID uuid.UUID) (bool, error) {
 	var exists bool
-	err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM players WHERE lobby_id = $1 AND user_id = $2)`, lobbyID, userID).Scan(&exists)
+	err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM players WHERE lobby_id = $1 AND user_id = $2 AND is_active = true)`, lobbyID, userID).Scan(&exists)
 	if err != nil {
 		return false, err
 	}
 	return exists, nil
+}
+
+func (r *PostgresRepository) KickPlayerTx(tx *sql.Tx, lobbyID uuid.UUID, targetUserID uuid.UUID) error {
+	_, err := tx.Exec(`
+		UPDATE players
+		SET is_active = false, left_at = NOW()
+		WHERE lobby_id = $1 AND user_id = $2 AND is_active = true
+	`, lobbyID, targetUserID)
+	return err
 }

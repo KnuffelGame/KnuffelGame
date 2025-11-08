@@ -72,3 +72,8 @@ type LobbyDetailResponse struct {
 type JoinLobbyRequest struct {
 	JoinCode string `json:"join_code" validate:"required,len=6"`
 }
+
+// KickPlayerRequest represents the request to kick a player from a lobby
+type KickPlayerRequest struct {
+	TargetUserID string `json:"target_user_id" validate:"required,uuid"`
+}

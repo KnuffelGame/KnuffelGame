@@ -36,6 +36,9 @@ func New(repo repository.Repository, codeGen *joincode.Generator) http.Handler {
 		// Get lobby details - require membership
 		r.With(handlers.RequireLobbyMember(repo)).Get("/{lobby_id}", handlers.GetLobbyHandler(repo))
 
+		// Kick player - require leadership
+		r.With(handlers.RequireLobbyLeader(repo)).Post("/{lobby_id}/kick", handlers.KickPlayerHandler(repo))
+
 		// Other lobby routes can use RequireLobbyMember or RequireLobbyLeader as appropriate
 		// e.g. r.With(handlers.RequireLobbyLeader(repo)).Post("/{lobby_id}/start", handlers.StartLobbyHandler(db))
 	})

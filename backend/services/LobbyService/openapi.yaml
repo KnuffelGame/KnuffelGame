@@ -263,7 +263,6 @@ paths:
         
         **Validations:**
         - User must be lobby leader
-        - Lobby must be in "waiting" status
         - Target player must be in lobby
         - Cannot kick yourself (use /leave instead)
         
