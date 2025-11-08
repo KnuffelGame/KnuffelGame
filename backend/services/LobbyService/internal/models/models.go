@@ -67,3 +67,8 @@ type LobbyDetailResponse struct {
 	LeaderID uuid.UUID    `json:"leader_id"`
 	Players  []PlayerInfo `json:"players"`
 }
+
+// JoinLobbyRequest represents the request to join a lobby by join code
+type JoinLobbyRequest struct {
+	JoinCode string `json:"join_code" validate:"required,len=6"`
+}

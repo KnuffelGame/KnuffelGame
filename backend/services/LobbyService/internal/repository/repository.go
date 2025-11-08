@@ -18,4 +18,11 @@ type Repository interface {
 	GetLobbyDetail(ctx context.Context, lobbyID uuid.UUID) (*models.LobbyDetailResponse, error)
 	GetLobbyLeaderID(ctx context.Context, lobbyID uuid.UUID) (uuid.UUID, error)
 	IsMember(ctx context.Context, lobbyID uuid.UUID, userID uuid.UUID) (bool, error)
+	GetLobbyByJoinCode(ctx context.Context, joinCode string) (*models.Lobby, error)
+	GetLobbyPlayerCount(ctx context.Context, lobbyID uuid.UUID) (int, error)
+
+	// Transaction-based versions for join lobby functionality
+	GetLobbyByJoinCodeTx(tx *sql.Tx, joinCode string) (*models.Lobby, error)
+	GetLobbyPlayerCountTx(tx *sql.Tx, lobbyID uuid.UUID) (int, error)
+	IsMemberTx(tx *sql.Tx, lobbyID uuid.UUID, userID uuid.UUID) (bool, error)
 }
