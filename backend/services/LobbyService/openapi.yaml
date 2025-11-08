@@ -258,17 +258,17 @@ paths:
         - Lobbies
       summary: Kick player from lobby
       description: |
-        Removes a player from the lobby. Only available to lobby leader.
+        Completely removes a player from the lobby (hard delete). Only available to lobby leader.
         Can only be used while lobby status is "waiting".
-        
+    
         **Validations:**
         - User must be lobby leader
         - Target player must be in lobby
         - Cannot kick yourself (use /leave instead)
-        
+    
         **Actions:**
         1. Validate leader permission
-        2. Remove player from lobby
+        2. Completely remove player from lobby (hard delete)
         3. Publish "player_kicked" event to all players
         4. Publish "you_were_kicked" event to kicked player
       operationId: kickPlayer
@@ -299,7 +299,7 @@ paths:
                   summary: Player kicked
                   value:
                     success: true
-                    message: "Player Bob has been removed from the lobby"
+                    message: "Player Bob has been completely removed from the lobby"
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':

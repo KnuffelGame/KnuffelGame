@@ -119,8 +119,8 @@ func KickPlayerHandler(repo repository.Repository) http.HandlerFunc {
 			return
 		}
 
-		// 3. Update the player record: SET is_active=false, left_at=NOW()
-		if err := repo.KickPlayerTx(tx, lobbyID, targetUserID); err != nil {
+		// 3. Delete the player record from the database
+		if err := repo.DeletePlayerTx(tx, lobbyID, targetUserID); err != nil {
 			log.Error("failed to kick player", slog.String("error", err.Error()), slog.String("lobby_id", lobbyID.String()), slog.String("target_user_id", targetUserID.String()))
 			httpx.WriteInternalError(w, "Failed to kick player", nil, log)
 			return

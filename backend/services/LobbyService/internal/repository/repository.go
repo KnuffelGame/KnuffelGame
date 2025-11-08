@@ -26,6 +26,6 @@ type Repository interface {
 	GetLobbyPlayerCountTx(tx *sql.Tx, lobbyID uuid.UUID) (int, error)
 	IsMemberTx(tx *sql.Tx, lobbyID uuid.UUID, userID uuid.UUID) (bool, error)
 
-	// Kick player functionality
-	KickPlayerTx(tx *sql.Tx, lobbyID uuid.UUID, targetUserID uuid.UUID) error
+	// Delete player functionality
+	DeletePlayerTx(tx *sql.Tx, lobbyID uuid.UUID, targetUserID uuid.UUID) error
 }

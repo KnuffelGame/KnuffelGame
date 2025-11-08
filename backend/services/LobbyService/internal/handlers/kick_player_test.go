@@ -37,12 +37,12 @@ func TestKickPlayer_Success(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"leader_id"}).AddRow(userID.String()))
 
 	// Check if target user is member
-	mock.ExpectQuery("SELECT EXISTS").
+	mock.ExpectQuery("SELECT EXISTS\\(SELECT 1 FROM players WHERE lobby_id = \\$1 AND user_id = \\$2\\)").
 		WithArgs(lobbyID, targetUserID).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 
-	// Kick player
-	mock.ExpectExec("UPDATE players SET is_active = false, left_at = NOW\\(\\) WHERE lobby_id = \\$1 AND user_id = \\$2 AND is_active = true").
+	// Delete player
+	mock.ExpectExec("DELETE FROM players WHERE lobby_id = \\$1 AND user_id = \\$2").
 		WithArgs(lobbyID, targetUserID).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
@@ -313,7 +313,7 @@ func TestKickPlayer_TargetNotInLobby(t *testing.T) {
 	mock.ExpectQuery("SELECT leader_id::text FROM lobbies WHERE id =").
 		WithArgs(lobbyID).
 		WillReturnRows(sqlmock.NewRows([]string{"leader_id"}).AddRow(userID.String()))
-	mock.ExpectQuery("SELECT EXISTS").
+	mock.ExpectQuery("SELECT EXISTS\\(SELECT 1 FROM players WHERE lobby_id = \\$1 AND user_id = \\$2\\)").
 		WithArgs(lobbyID, targetUserID).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectRollback()
@@ -393,10 +393,10 @@ func TestKickPlayer_DatabaseError(t *testing.T) {
 	mock.ExpectQuery("SELECT leader_id::text FROM lobbies WHERE id =").
 		WithArgs(lobbyID).
 		WillReturnRows(sqlmock.NewRows([]string{"leader_id"}).AddRow(userID.String()))
-	mock.ExpectQuery("SELECT EXISTS").
+	mock.ExpectQuery("SELECT EXISTS\\(SELECT 1 FROM players WHERE lobby_id = \\$1 AND user_id = \\$2\\)").
 		WithArgs(lobbyID, targetUserID).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
-	mock.ExpectExec("UPDATE players SET is_active = false, left_at = NOW\\(\\) WHERE lobby_id = \\$1 AND user_id = \\$2 AND is_active = true").
+	mock.ExpectExec("DELETE FROM players WHERE lobby_id = \\$1 AND user_id = \\$2").
 		WithArgs(lobbyID, targetUserID).
 		WillReturnError(sql.ErrConnDone)
 	mock.ExpectRollback()
