@@ -521,6 +521,58 @@ paths:
                   value:
                     status: "ok"
 
+  /internal/lobbies/{lobby_id}/players/{player_id}/active:
+    put:
+      tags:
+        - Internal
+      summary: Update player active status
+      description: |
+        Updates the active status of a player in the lobby.
+        
+        **Actions:**
+        1. Update player's is_active status in the database
+        2. Publish "player_status_changed" event if status changed
+      operationId: updatePlayerActive
+      parameters:
+        - $ref: '#/components/parameters/LobbyIdPath'
+        - $ref: '#/components/parameters/PlayerIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePlayerActiveRequest'
+            examples:
+              setActive:
+                summary: Set player as active
+                value:
+                  is_active: true
+              setInactive:
+                summary: Set player as inactive
+                value:
+                  is_active: false
+      responses:
+        '200':
+          description: Player active status updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+              examples:
+                success:
+                  summary: Status updated
+                  value:
+                    success: true
+                    message: "Player active status updated"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/LobbyNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
 components:
   parameters:
     LobbyIdPath:
@@ -553,6 +605,16 @@ components:
         minLength: 3
         maxLength: 20
         example: "Alice"
+
+    PlayerIdPath:
+      name: player_id
+      in: path
+      required: true
+      description: Unique player identifier (UUID)
+      schema:
+        type: string
+        format: uuid
+        example: "650e8400-e29b-41d4-a716-446655440001"
 
   schemas:
     LobbyDetailResponse:
@@ -734,6 +796,16 @@ components:
           type: object
           description: Additional error details
           additionalProperties: true
+
+    UpdatePlayerActiveRequest:
+      type: object
+      required:
+        - is_active
+      properties:
+        is_active:
+          type: boolean
+          description: Whether the player is currently active in the lobby
+          example: true
 
   responses:
     BadRequest:

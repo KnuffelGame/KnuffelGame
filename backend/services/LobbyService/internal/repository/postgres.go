@@ -265,3 +265,22 @@ func (r *PostgresRepository) DeletePlayerTx(tx *sql.Tx, lobbyID uuid.UUID, targe
 	`, lobbyID, targetUserID)
 	return err
 }
+
+func (r *PostgresRepository) UpdatePlayerActiveStatusTx(tx *sql.Tx, lobbyID, playerID uuid.UUID, isActive bool) error {
+	result, err := tx.Exec(`
+		UPDATE players
+		SET is_active = $1
+		WHERE lobby_id = $2 AND id = $3
+	`, isActive, lobbyID, playerID)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}

@@ -77,3 +77,8 @@ type JoinLobbyRequest struct {
 type KickPlayerRequest struct {
 	TargetUserID string `json:"target_user_id" validate:"required,uuid"`
 }
+
+// UpdatePlayerActiveStatusRequest represents the request to update a player's active status
+type UpdatePlayerActiveStatusRequest struct {
+	IsActive bool `json:"is_active"`
+}

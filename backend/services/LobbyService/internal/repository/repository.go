@@ -28,4 +28,7 @@ type Repository interface {
 
 	// Delete player functionality
 	DeletePlayerTx(tx *sql.Tx, lobbyID uuid.UUID, targetUserID uuid.UUID) error
+
+	// Update player active status
+	UpdatePlayerActiveStatusTx(tx *sql.Tx, lobbyID, playerID uuid.UUID, isActive bool) error
 }

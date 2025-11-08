@@ -22,6 +22,13 @@ func New(repo repository.Repository, codeGen *joincode.Generator) http.Handler {
 	// Healthcheck
 	healthcheck.Mount(r)
 
+	// Internal endpoints (no auth required)
+	r.Route("/internal", func(r chi.Router) {
+		r.Route("/lobbies", func(r chi.Router) {
+			r.Put("/{lobby_id}/players/{player_id}/active", handlers.UpdatePlayerActiveStatusHandler(repo))
+		})
+	})
+
 	// Lobby endpoints grouped under auth middleware
 	r.Route("/lobbies", func(r chi.Router) {
 		// Authentication middleware (reads X-User-ID / X-Username and injects user into context)
