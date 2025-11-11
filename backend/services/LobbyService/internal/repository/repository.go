@@ -25,4 +25,10 @@ type Repository interface {
 	GetLobbyByJoinCodeTx(tx *sql.Tx, joinCode string) (*models.Lobby, error)
 	GetLobbyPlayerCountTx(tx *sql.Tx, lobbyID uuid.UUID) (int, error)
 	IsMemberTx(tx *sql.Tx, lobbyID uuid.UUID, userID uuid.UUID) (bool, error)
+
+	// Delete player functionality
+	DeletePlayerTx(tx *sql.Tx, lobbyID uuid.UUID, targetUserID uuid.UUID) error
+
+	// Update player active status
+	UpdatePlayerActiveStatusTx(tx *sql.Tx, lobbyID, playerID uuid.UUID, isActive bool) error
 }

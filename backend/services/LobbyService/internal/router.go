@@ -22,6 +22,13 @@ func New(repo repository.Repository, codeGen *joincode.Generator) http.Handler {
 	// Healthcheck
 	healthcheck.Mount(r)
 
+	// Internal endpoints (no auth required)
+	r.Route("/internal", func(r chi.Router) {
+		r.Route("/lobbies", func(r chi.Router) {
+			r.Put("/{lobby_id}/players/{player_id}/active", handlers.UpdatePlayerActiveStatusHandler(repo))
+		})
+	})
+
 	// Lobby endpoints grouped under auth middleware
 	r.Route("/lobbies", func(r chi.Router) {
 		// Authentication middleware (reads X-User-ID / X-Username and injects user into context)
@@ -35,6 +42,9 @@ func New(repo repository.Repository, codeGen *joincode.Generator) http.Handler {
 
 		// Get lobby details - require membership
 		r.With(handlers.RequireLobbyMember(repo)).Get("/{lobby_id}", handlers.GetLobbyHandler(repo))
+
+		// Kick player - require leadership
+		r.With(handlers.RequireLobbyLeader(repo)).Post("/{lobby_id}/kick", handlers.KickPlayerHandler(repo))
 
 		// Other lobby routes can use RequireLobbyMember or RequireLobbyLeader as appropriate
 		// e.g. r.With(handlers.RequireLobbyLeader(repo)).Post("/{lobby_id}/start", handlers.StartLobbyHandler(db))
