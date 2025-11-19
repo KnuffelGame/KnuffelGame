@@ -1,35 +1,31 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+// src/App.tsx
 
-function App() {
-  const [count, setCount] = useState(0)
+import React from 'react';
+import { 
+  BrowserRouter as Router, 
+  Routes, 
+  Route 
+} from 'react-router-dom';
 
+// Importieren Sie die implementierten Seiten
+import HomePage from './pages/HomePage'; 
+import LobbyPage from './pages/LobbyPage'; 
+
+const App: React.FC = () => {
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
-}
+    // Der Router umgibt die gesamte Anwendung
+    <Router>
+      <Routes>
+        {/* Route für die Startseite (Task 7.6) */}
+        <Route path="/" element={<HomePage />} />
+        
+        {/* Route für die Lobby-Ansicht (Task 7.7) - Das Ziel des Redirects */}
+        <Route path="/lobby/:code" element={<LobbyPage />} /> 
 
-export default App
+        {/* Weitere Routen (z.B. /game/:id) kommen später hierher */}
+      </Routes>
+    </Router>
+  );
+};
+
+export default App;
