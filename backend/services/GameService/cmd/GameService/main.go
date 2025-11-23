@@ -1,83 +1,124 @@
 package main
 
 import (
+	"database/sql"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 
-	"github.com/KnuffelGame/KnuffelGame/backend/services/GameService/internal/database"
+	"github.com/KnuffelGame/KnuffelGame/backend/libs/logger"
+	"github.com/KnuffelGame/KnuffelGame/backend/services/GameService/internal/db"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/GameService/internal/handlers"
+	"github.com/KnuffelGame/KnuffelGame/backend/services/GameService/pkg/config"
 	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgx/v5/pgxpool"
+
+	// WICHTIG: Der Treiber muss hier importiert sein
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 // Server bündelt Abhängigkeiten
 type Server struct {
 	logger *slog.Logger
-	db     *pgxpool.Pool
+	dbConn *sql.DB // ÄNDERUNG: Hier nutzen wir direkt *sql.DB
 	router *gin.Engine
 }
 
 func main() {
-	// 1. Logger initialisieren
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	slog.SetDefault(logger)
+	// 1. Setup Logger & Config
+	if os.Getenv("SERVICE_NAME") == "" {
+		_ = os.Setenv("SERVICE_NAME", "GameService")
+	}
+	log := logger.FromEnv().With(slog.String("component", "bootstrap"))
 
-	// 2. Datenbankverbindung
-	logger.Info("Verbinde mit Datenbank 'game_db'...")
-	pool, err := database.Connect()
+	cfg := config.Load()
+
+	// Connection String bauen (DSN)
+	dsn := fmt.Sprintf(
+		"postgres://%s:%s@%s:%s/%s?sslmode=%s",
+		cfg.DatabaseUser,
+		cfg.DatabasePassword,
+		cfg.DatabaseHost,
+		cfg.DatabasePort,
+		cfg.DatabaseName,
+		cfg.DatabaseSSLMode,
+	)
+
+	log.Info("Connecting to database", slog.String("dsn_masked", fmt.Sprintf("postgres://%s:***@%s:%s/%s", cfg.DatabaseUser, cfg.DatabaseHost, cfg.DatabasePort, cfg.DatabaseName)))
+
+	// 2. Datenbank initialisieren (NUR EINMAL)
+	// Wir nutzen sql.Open mit dem "pgx" Treiber
+	dbConn, err := sql.Open("pgx", dsn)
 	if err != nil {
-		logger.Error("Datenbankverbindung fehlgeschlagen", "error", err)
+		log.Error("failed to open database connection", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
-	defer pool.Close()
-	logger.Info("Erfolgreich mit 'game_db' verbunden.")
+	defer dbConn.Close()
 
-	// 3. Gin-Router initialisieren
+	// Testen ob die Verbindung wirklich steht (Ping)
+	if err := dbConn.Ping(); err != nil {
+		log.Error("failed to ping database", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
+	// 3. Migrationen ausführen (Nutzt dieselbe Verbindung)
+	if err := db.RunMigrations(dbConn); err != nil {
+		log.Error("failed to run migrations", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
+	// 4. Gin-Router initialisieren
 	router := gin.Default()
 
 	// Server-Struktur erstellen
 	srv := &Server{
-		logger: logger,
-		db:     pool,
+		logger: log,
+		dbConn: dbConn, // Das ist jetzt unser *sql.DB
 		router: router,
 	}
 
-	// --- HIER IST DIE NEUE LOGIK ---
-	// 4. Abhängigkeiten initialisieren (Repository und Handler)
+	// 5. Abhängigkeiten initialisieren
 
-	// Erstelle das Game-Repository
-	gameRepo := database.NewRepository(srv.db, srv.logger)
+	// Repository erstellen
+	// Hinweis: Unser 'NewRepository' aus dem vorherigen Schritt braucht nur *sql.DB.
+	// Falls du den Logger im Repo brauchst, musst du NewRepository anpassen.
+	// Ich gehe hier vom Standard aus:
+	gameRepo := db.NewRepository(srv.dbConn)
 
-	// Erstelle den Game-Handler
+	// Handler erstellen
 	gameHandler := handlers.NewHandler(gameRepo, srv.logger)
 
-	// 5. Routen registrieren
-	srv.registerRoutes(gameHandler) // Übergebe den Handler an die Routen
-	// --- ENDE NEUE LOGIK ---
+	// 6. Routen registrieren
+	srv.registerRoutes(gameHandler)
 
-	// 6. Server starten
-	port := "8083"
-	logger.Info("Game Service startet auf Port", "port", port)
+	// 7. Server starten
+	port := "8082"
+	log.Info("Game Service startet", "port", port)
 
 	if err := router.Run(":" + port); err != nil {
-		logger.Error("Server konnte nicht gestartet werden", "error", err)
+		log.Error("Server konnte nicht gestartet werden", "error", err)
 		os.Exit(1)
 	}
 }
 
 // registerRoutes bündelt alle HTTP-Routen des Servers
-// Wir übergeben den Handler, damit er die Routen registrieren kann.
-func (s *Server) registerRoutes(gameHandler *handlers.Handler) { // NEU
+func (s *Server) registerRoutes(gameHandler *handlers.Handler) {
 	// Health-Check-Route
-	s.router.GET("/health", s.healthCheckHandler)
+	s.router.GET("/healthcheck", s.healthCheckHandler) // Habe den Pfad auf /healthcheck angepasst (passend zum Dockerfile)
 
-	// Registriere die Route für GET /games/:game_id
-	s.router.GET("/games/:game_id", gameHandler.GetGameState)
+	// Game Routes
+	// s.router.GET("/games/:game_id", gameHandler.GetGameState)
+	s.router.POST("/internal/create", gameHandler.CreateGame)
 }
 
 // healthCheckHandler ist ein einfacher Handler für den Health-Check.
 func (s *Server) healthCheckHandler(c *gin.Context) {
+	// Wir prüfen hier auch kurz, ob die DB noch da ist
+	if err := s.dbConn.Ping(); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "error", "db": "disconnected"})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"status":  "ok",
 		"service": "game-service",
