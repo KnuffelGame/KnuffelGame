@@ -1,106 +1,137 @@
-Auth middleware
-===============
+# Auth-Bibliothek (Header-basierte Auth)
 
-Purpose
--------
-This small package provides a minimal authentication middleware that parses and validates the HTTP headers the API Gateway injects (by default `X-User-ID` and `X-Username`), normalizes them into a `User` value and stores it in the request context for downstream handlers.
+Übersicht und Zweck
+-------------------
+Diese Bibliothek stellt eine schlanke Middleware bereit, die zwei vom Gateway gesetzte HTTP-Header ausliest, validiert und daraus einen typisierten Benutzerkontext erstellt. Standard-Header sind `X-User-ID` und `X-Username`. Der Benutzer wird als `User` im Request-Context gespeichert und steht nachgelagerten Handlern und Guards zur Verfügung. Siehe [auth.User()](backend/libs/auth/auth.go:21).
 
-Design goals
-------------
-- Keep responsibilities narrow: parse headers, validate `X-User-ID` as a UUID, and inject a typed `User` into `context.Context`.
-- Avoid DB access or business authorization logic; those belong to service-specific authorizers.
-- Be lightweight and easy to reuse across services inside the repo.
+Exportoberfläche und API-Referenz
+---------------------------------
+- Typen
+  - [auth.User()](backend/libs/auth/auth.go:21)
+    - Felder: `ID uuid.UUID`, `Username string`
+- Funktionen
+  - [auth.FromContext()](backend/libs/auth/auth.go:27)
+    - Liefert den zuvor injizierten `User` aus `context.Context`. Rückgabe `(User, bool)`; `bool=false`, wenn kein Benutzer im Kontext vorhanden ist.
+  - [auth.NewAuthMiddleware()](backend/libs/auth/auth.go:35)
+    - Konstruktor für eine Chi-kompatible Middleware. Parameter: `userHeader`, `usernameHeader` (beide `string`). Liest die angegebenen Headernamen, validiert sie und injiziert `User` in den Kontext. Signatur: `func(userHeader, usernameHeader string) func(http.Handler) http.Handler`.
+- Variablen
+  - [auth.AuthMiddleware()](backend/libs/auth/auth.go:63)
+    - Vorkonfigurierte Middleware mit den Standard-Headern.
+- Konstanten
+  - [auth.DefaultHeaderUserID()](backend/libs/auth/auth.go:14) = `"X-User-ID"`
+  - [auth.DefaultHeaderUsername()](backend/libs/auth/auth.go:15) = `"X-Username"`
 
-Public API
-----------
-- type User struct {
-    ID uuid.UUID
-    Username string
-  }
+Unterstützte Laufzeitumgebungen
+-------------------------------
+- Go-Version: aus [go.mod](backend/libs/auth/go.mod) abgeleitet – `go 1.25.3`.
+- Chi-Router wird indirekt unterstützt (über Services), ist jedoch kein harte Abhängigkeit der Bibliothek.
 
-- func FromContext(ctx context.Context) (User, bool)
-  - Retrieve the `User` previously injected by the middleware.
+Abhängigkeiten
+--------------
+- Interne Bibliotheken:
+  - [backend/libs/httpx](backend/libs/httpx/httpx.go) – standardisierte JSON- und Fehlerantworten (z. B. [httpx.WriteBadRequest()](backend/libs/httpx/httpx.go:42))
+  - [backend/libs/logger](backend/libs/logger/middleware.go) – Request-Logging (z. B. [logger.ChiMiddleware()](backend/libs/logger/middleware.go:15))
+- Extern:
+  - `github.com/google/uuid` – UUID-Parsing
+- Siehe [go.mod](backend/libs/auth/go.mod) für genaue Versionen und `replace`-Direktiven im Monorepo-Kontext.
 
-- func NewAuthMiddleware(userHeader, usernameHeader string) func(http.Handler) http.Handler
-  - Create a middleware that reads the specified header names and injects the `User`.
+Konfiguration und erwartete Header
+----------------------------------
+| Headername  | Typ                         | Pflicht | Beispiel                                    | Hinweise                                                                                   |
+|-------------|------------------------------|---------|---------------------------------------------|--------------------------------------------------------------------------------------------|
+| X-User-ID   | UUID (RFC 4122, i. d. R. v4) | Ja      | `550e8400-e29b-41d4-a716-446655440000`      | Validierung via `uuid.Parse()`. Kein strikter v4-Check; es wird allgemeines UUID-Format geprüft. |
+| X-Username  | string                       | Ja      | `Alice`                                     | Keine Längen-/Zeichenvalidierung durch die Bibliothek; Services können eigene Regeln erzwingen.   |
 
-- var AuthMiddleware = NewAuthMiddleware(DefaultHeaderUserID, DefaultHeaderUsername)
-  - Ready-to-use middleware configured with the default headers.
+Verhalten und Fehlerbehandlung
+------------------------------
+- Fehlende Header (`X-User-ID` oder `X-Username`): 400 Bad Request mit JSON-Fehlerhülle (Code `bad_request`), geschrieben via [httpx.WriteBadRequest()](backend/libs/httpx/httpx.go:42).
+- Ungültige UUID in `X-User-ID`: 400 Bad Request mit Detailhinweis, geschrieben via [httpx.WriteBadRequest()](backend/libs/httpx/httpx.go:42).
+- Logging: Warnungen unter der Logger-Gruppe `"middleware"` mit Attribut `action="auth"`, erzeugt über das Logger-Paket.
+- Autorisierung findet NICHT in der Middleware statt; dafür sind service-spezifische Guards zuständig (z. B. DB-/Rollenprüfungen).
 
-- const DefaultHeaderUserID = "X-User-ID"
-- const DefaultHeaderUsername = "X-Username"
-
-Usage
------
-1) Mount the middleware in your router for routes that require an authenticated user (example using `chi`):
-
+Verwendung (chi.Router)
+-----------------------
+Middleware einbinden:
 ```go
-import (
-  "github.com/KnuffelGame/KnuffelGame/backend/libs/auth"
-  "github.com/go-chi/chi/v5"
-)
-
 r := chi.NewRouter()
-// mount auth for lobby routes
+// Auth für /lobbies aktivieren
 r.Route("/lobbies", func(r chi.Router) {
-    r.Use(auth.AuthMiddleware) // injects auth.User into context
+    r.Use(auth.AuthMiddleware) // injiziert auth.User in den Kontext
     r.Post("/", handlers.CreateLobbyHandler(...))
     r.With(handlers.RequireLobbyMember(db)).Get("/{lobby_id}", handlers.GetLobbyHandler(db))
 })
 ```
+Referenz: [auth.AuthMiddleware()](backend/libs/auth/auth.go:63), [handlers.RequireLobbyMember()](backend/services/LobbyService/internal/handlers/authorizers.go:16)
 
-2) Read the user in a handler:
-
+Benutzerkontext in Handlern auslesen:
 ```go
 u, ok := auth.FromContext(r.Context())
 if !ok {
-    // either return 401/400 or fall back to header parsing for transitional code
+    // ggf. 401/400 zurückgeben (fehlende Auth) – abhängig vom Handler-/Service-Konzept
 }
-// use u.ID, u.Username
+// Zugriff: u.ID, u.Username
 ```
+Referenz: [auth.FromContext()](backend/libs/auth/auth.go:27)
 
-3) Custom header names
-
-If your gateway uses different headers, construct a middleware with the desired header names:
-
-```go
-r.Use(auth.NewAuthMiddleware("X-My-ID", "X-My-Name"))
-```
-
-Behavior and error handling
+Beispiel mit Service-Guards
 ---------------------------
-- If the user header or username header is missing, the middleware writes a 400 Bad Request and does not call the next handler.
-- If `X-User-ID` is present but not a valid UUID, the middleware writes a 400 Bad Request.
-- The middleware logs warnings using the repository `libs/logger` package.
-- The middleware purposefully does not decide authorization; that is left to service authorizers (DB checks, role checks, etc.).
+- Mitgliedschaft prüfen: [handlers.RequireLobbyMember()](backend/services/LobbyService/internal/handlers/authorizers.go:16)
+- Leader-Recht prüfen: [handlers.RequireLobbyLeader()](backend/services/LobbyService/internal/handlers/authorizers.go:82)
 
-Testing
--------
-Unit tests for the `auth` package are included under `backend/libs/auth`. Run them with:
+Diese Guards erwarten, dass der Benutzerkontext durch die Auth-Middleware gesetzt wurde und antworten auf Fehlersituationen mit [httpx.WriteUnauthorized()](backend/libs/httpx/httpx.go:47), [httpx.WriteBadRequest()](backend/libs/httpx/httpx.go:42), [httpx.WriteForbidden()](backend/libs/httpx/httpx.go:52) bzw. [httpx.WriteNotFound()](backend/libs/httpx/httpx.go:57).
 
+Performance-Hinweise
+--------------------
+- Geringe Kosten: Header-Lookups und ein `uuid.Parse()` pro Request.
+- Reihenfolge der Middleware:
+  - Empfehlung: [logger.ChiMiddleware()](backend/libs/logger/middleware.go:15) möglichst außen (früh) einbinden, damit auch abgebrochene Requests (z. B. 400 aus Auth) geloggt werden.
+  - Auth vor Authorizer-Guards, damit `auth.User` verfügbar ist.
+
+Versionierung & Kompatibilität
+------------------------------
+- Interne libs verwenden im Monorepo `replace`-Direktiven (siehe [go.mod](backend/libs/auth/go.mod)). SemVer ist intern nicht streng erforderlich, externe Nutzung sollte Versionen pinnen.
+- Kompatible Go-Version laut Modul: `1.25.3`. Services sollten diese oder neuere kompatible Minor-Version verwenden.
+
+Bekannte Stolpersteine & Troubleshooting
+----------------------------------------
+- 400 Bad Request bei fehlenden/ungültigen Auth-Headern.
+- Falsches UUID-Format (z. B. Tippfehler) führt zu 400.
+- Proxy-/Gateway-Interaktion: Stellen Sie sicher, dass Upstream-Header (`X-User-ID`, `X-Username`) nicht überschrieben oder entfernt werden. Bei Reverse-Proxies ggf. Header-Weiterleitung explizit erlauben.
+
+Bekannte Abweichungen
+---------------------
+- Striktes UUIDv4: Der Code prüft aktuell allgemeines UUID-Format via `uuid.Parse()` und erzwingt keine v4-Variante. Vorschlag: Optionalen Validierungsmodus ergänzen (z. B. `OptionStrictUUIDv4`), oder Services dokumentieren, dass Producer v4 liefern müssen.
+- Username-Regeln: Diese Bibliothek erzwingt keine maximale Länge oder Zeichenmenge. Services (z. B. LobbyService) dokumentieren `max 20`. Vorschlag: Entweder Regeln in Services belassen (empfohlen) oder optionale Validierung in [auth.NewAuthMiddleware()](backend/libs/auth/auth.go:35) per Funktionsoptionen ermöglichen.
+- Statuscode-Konsistenz: Die Auth-Middleware antwortet bei fehlenden Headers mit 400. Einige Guards verwenden 401, wenn der Benutzer im Kontext fehlt (z. B. initiale Prüfungen). Vorschlag: Dienst-spezifische Richtlinie definieren und ggf. Middleware-Option zur Auswahl von 400/401 anbieten; bis dahin Verhalten im Service-Handbuch klar dokumentieren.
+
+Repository-Konventionen
+-----------------------
+- Stil und Terminologie synchron zu Services: „Benutzerkontext“, „Header-basierte Auth“, „Guards/Authorizers“.
+- Keine OpenAPI in Libraries; Dokument bleibt fokussiert auf Exportoberfläche und Laufzeitverhalten.
+- Monorepo-Setup: Services binden die Bibliothek via `require` und `replace`. Beispiel siehe [go.mod](backend/libs/auth/go.mod).
+
+Praktische Beispiele (curl)
+---------------------------
+Create Lobby (Service-Beispiel, erfordert Auth-Header):
+```bash
+curl -sS -X POST http://localhost:8083/lobbies \
+  -H "X-User-ID: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "X-Username: Alice"
+```
+
+Join Lobby:
+```bash
+curl -sS -X POST http://localhost:8083/lobbies/join \
+  -H "Content-Type: application/json" \
+  -H "X-User-ID: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "X-Username: Alice" \
+  -d '{"join_code":"ABC123"}'
+```
+
+Tests
+-----
+Unit-Tests sind im Modul enthalten. Ausführen:
 ```bash
 cd backend/libs/auth
 go test ./...
 ```
-
-Migration notes (adopting the library in a service)
---------------------------------------------------
-- Add a `require` for `github.com/KnuffelGame/KnuffelGame/backend/libs/auth` in your service `go.mod` and a `replace` directive to the local path, e.g.:
-
-```text
-replace github.com/KnuffelGame/KnuffelGame/backend/libs/auth => ../../libs/auth
-```
-
-- Update your router to use `auth.AuthMiddleware` and update handlers to prefer `auth.FromContext`.
-- During a transition you can keep handler-level header fallbacks to avoid breaking tests; after migrating handlers you can remove fallbacks.
-
-Extending the library
----------------------
-- The library intentionally avoids heavy dependencies. If you want:
-  - make header names and error handling pluggable via functional options
-  - accept a custom logger interface instead of importing `libs/logger`
-  - add integration tests that run against a full dev environment
-
-Support
--------
-If you run into build problems when importing this package from a service, ensure the service `go.mod` has a `replace` pointing to the local `../../libs/auth` directory (monorepo layout). If you'd like, I can add example `go.mod` snippets to specific services.

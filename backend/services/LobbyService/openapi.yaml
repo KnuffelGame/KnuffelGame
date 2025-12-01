@@ -1,117 +1,195 @@
-openapi: 3.0.3
+openapi: 3.1.0
 info:
-  title: Knuffel SSE Service API
+  title: Knuffel Lobby Service API
   description: |
-    Server-Sent Events service – delivers state update triggers to clients.
+    HTTP API for managing game lobbies: creation, joining, reading details and player management.
     
-    **Event Format:**
-    ```
-    id: evt_01JDJ5C2ZK5Z
-    event: lobby_updated
-    data: 2025-11-01T10:35:00Z
-    ```
-    
-    **Client behavior:** On receiving event `X`, fetch current state from `/api/X` endpoint.
+    Authentication is provided by API Gateway headers. Routes under "/lobbies" require the headers "X-User-ID" (UUID) and "X-Username". The middleware injects a typed user into the request context; handlers may still validate headers explicitly.
   version: 1.0.0
   contact:
     name: Knuffel Team
 
 servers:
-  - url: http://localhost:8084
-    description: SSEService
+  - url: http://localhost:{port}
+    description: Local
+    variables:
+      port:
+        default: "8083"
+  - url: https://lobby-staging.example.com
+    description: Staging
+  - url: https://lobby.example.com
+    description: Production
 
 tags:
-  - name: Client
-    description: Client SSE endpoints
+  - name: Lobbies
+    description: Lobby lifecycle and access
+  - name: Players
+    description: Player management within a lobby
   - name: Internal
-    description: Internal endpoints for microservices
+    description: Internal service-to-service endpoints (no auth)
+  - name: Health
+    description: Health and readiness
 
+security:
+  - UserIDHeader: []
+    UsernameHeader: []
 paths:
-  /events:
-    get:
-      tags:
-        - Client
-      summary: Subscribe to state update triggers
-      operationId: subscribe
-      parameters:
-        - $ref: '#/components/parameters/UserIdHeader'
-      responses:
-        '200':
-          description: SSE connection established
-          content:
-            text/event-stream:
-              schema:
-                type: string
-              example: |
-                id: evt_01JDJ5C2ZK5Z
-                event: lobby_updated
-                data: 2025-11-01T10:35:00Z
-                
-                id: evt_01JDJ5D3AL6A
-                event: game_updated
-                data: 2025-11-01T11:00:00Z
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-  /internal/events/send:
+  /lobbies:
     post:
-      tags:
-        - Internal
-      summary: Broadcast state update trigger
-      description: |
-        Send timestamped trigger to specific players.
-        
-        **Usage:**
-        - Lobby service: `type: "lobby_updated"` + timestamp
-        - Game service: `type: "game_updated"` + timestamp
-        - Dice service: `type: "dice_rolled"` + timestamp
-      operationId: sendTrigger
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/TriggerRequest'
-            examples:
-              lobby:
-                summary: Lobby update trigger
-                value:
-                  target_player_ids: ["usr_alice123", "usr_bob456"]
-                  type: "lobby_updated"
-              game:
-                summary: Game update trigger
-                value:
-                  target_player_ids: ["usr_alice123"]
-                  type: "game_updated"
-              dice:
-                summary: Dice rolled trigger
-                value:
-                  target_player_ids: ["usr_alice123", "usr_bob456", "usr_charlie789"]
-                  type: "dice_rolled"
+      tags: [Lobbies]
+      summary: Create a new lobby
+      description: Creates a new lobby with the requesting user as leader; requires X-User-ID and X-Username headers; generates a unique 6-character uppercase alphanumeric join code; creates the user idempotently if not existing; adds the user as the first active player; returns lobby detail; responds 201 on success.
+      operationId: createLobby
+      parameters:
+        - $ref: '#/components/parameters/XUserIDHeader'
+        - $ref: '#/components/parameters/XUsernameHeader'
       responses:
-        '202':
-          description: Trigger queued for delivery
+        '201':
+          description: Lobby created
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AckResponse'
+                $ref: '#/components/schemas/CreateLobbyResponse'
               examples:
-                success:
-                  summary: Event accepted
+                example:
                   value:
-                    success: true
+                    lobby_id: "123e4567-e89b-12d3-a456-426614174000"
+                    join_code: "ABC123"
+                    leader_id: "550e8400-e29b-41d4-a716-446655440000"
+                    status: "waiting"
+                    players:
+                      - id: "789e4567-e89b-12d3-a456-426614174111"
+                        user_id: "550e8400-e29b-41d4-a716-446655440000"
+                        username: "Alice"
+                        joined_at: "2025-11-01T12:34:56Z"
+                        is_active: true
         '400':
           $ref: '#/components/responses/BadRequest'
         '500':
           $ref: '#/components/responses/InternalServerError'
 
+  /lobbies/join:
+    post:
+      tags: [Lobbies]
+      summary: Join a lobby by join code
+      description: Join an existing lobby using a 6-character uppercase alphanumeric join_code; requires X-User-ID and X-Username headers; validates lobby status is "waiting", enforces max 6 active players, prevents duplicate membership; returns updated lobby detail; responds 200 on success.
+      operationId: joinLobby
+      parameters:
+        - $ref: '#/components/parameters/XUserIDHeader'
+        - $ref: '#/components/parameters/XUsernameHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JoinLobbyRequest'
+            examples:
+              example:
+                value:
+                  join_code: "ABC123"
+      responses:
+        '200':
+          description: Joined lobby successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LobbyDetailResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /lobbies/{lobby_id}:
+    get:
+      tags: [Lobbies]
+      summary: Get lobby details
+      description: Retrieve full lobby details including players and leader; requires membership in the lobby (leader or player). Auth is enforced via middleware using X-User-ID/X-Username headers; handler additionally validates path and header formats. Responds 200 when authorized, 403 if not a member, 404 if lobby not found, 400 for invalid IDs, and 500 for database errors.
+      operationId: getLobby
+      parameters:
+        - $ref: '#/components/parameters/XUserIDHeader'
+        - $ref: '#/components/parameters/XUsernameHeader'
+        - $ref: '#/components/parameters/LobbyIdParam'
+      responses:
+        '200':
+          description: Lobby details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LobbyDetailResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /lobbies/{lobby_id}/kick:
+    post:
+      tags: [Players]
+      summary: Kick a player from a lobby (leader only)
+      description: Remove a player from a lobby by target_user_id; only the lobby leader may perform this action; cannot kick yourself; validates lobby existence and target membership; responds 204 on success, 403 if requester is not leader, 404 if lobby or target not found, 400 for invalid input, and 500 for database errors.
+      operationId: kickPlayer
+      parameters:
+        - $ref: '#/components/parameters/XUserIDHeader'
+        - $ref: '#/components/parameters/XUsernameHeader'
+        - $ref: '#/components/parameters/LobbyIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/KickPlayerRequest'
+      responses:
+        '204':
+          description: Player kicked
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /internal/lobbies/{lobby_id}/players/{player_id}/active:
+    put:
+      tags: [Internal]
+      summary: Update player's active status (internal)
+      description: Internal endpoint used by services to toggle a player's is_active flag within a lobby; validates lobby existence and membership of the player; responds 204 on success, 404 if lobby or player not found, 400 for invalid IDs/body, and 500 for database errors.
+      operationId: updatePlayerActiveStatus
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/LobbyIdParam'
+        - $ref: '#/components/parameters/PlayerIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePlayerActiveStatusRequest'
+      responses:
+        '204':
+          description: Player status updated
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
   /healthcheck:
     get:
-      tags:
-        - Internal
+      tags: [Health]
       summary: Health check
+      description: Simple liveness endpoint mounted by the healthcheck library; returns JSON {"status":"ok"} with 200.
       operationId: health
       responses:
         '200':
@@ -121,141 +199,172 @@ paths:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
               examples:
-                healthy:
-                  summary: Service running
+                ok:
                   value:
                     status: ok
-                    connections: 47
 
 components:
+  securitySchemes:
+    UserIDHeader:
+      type: apiKey
+      in: header
+      name: X-User-ID
+      description: UUID provided by API Gateway; used by AuthMiddleware.
+    UsernameHeader:
+      type: apiKey
+      in: header
+      name: X-Username
+      description: Username provided by API Gateway; used by AuthMiddleware.
   parameters:
-    UserIdHeader:
+    XUserIDHeader:
       name: X-User-ID
       in: header
       required: true
       schema:
         type: string
-        pattern: '^usr_[a-zA-Z0-9]+$'
-        example: "usr_alice123"
-
+        format: uuid
+      description: UUID of the authenticated user provided by the API Gateway.
+    XUsernameHeader:
+      name: X-Username
+      in: header
+      required: true
+      schema:
+        type: string
+        maxLength: 20
+      description: Username provided by the API Gateway.
+    LobbyIdParam:
+      name: lobby_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    PlayerIdParam:
+      name: player_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
   schemas:
-    TriggerRequest:
+    PlayerInfo:
       type: object
-      required:
-        - target_player_ids
-        - type
+      required: [id, user_id, username, joined_at, is_active]
       properties:
-        target_player_ids:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        username:
+          type: string
+          maxLength: 20
+        joined_at:
+          type: string
+          format: date-time
+        is_active:
+          type: boolean
+    LobbyDetailResponse:
+      type: object
+      required: [lobby_id, join_code, status, leader_id, players]
+      properties:
+        lobby_id:
+          type: string
+          format: uuid
+        join_code:
+          type: string
+          minLength: 6
+          maxLength: 6
+          description: 6-character uppercase alphanumeric code
+          example: "ABC123"
+        status:
+          type: string
+          enum: [waiting, running, finished]
+        leader_id:
+          type: string
+          format: uuid
+        players:
           type: array
           items:
-            type: string
-            pattern: '^usr_[a-zA-Z0-9]+$'
-          minItems: 1
-          example: ["usr_alice123", "usr_bob456"]
-        type:
-          type: string
-          description: Event type (becomes SSE event field)
-          example: "lobby_updated"
-
-    AckResponse:
+            $ref: '#/components/schemas/PlayerInfo'
+    CreateLobbyResponse:
+      allOf:
+        - $ref: '#/components/schemas/LobbyDetailResponse'
+    JoinLobbyRequest:
       type: object
-      required:
-        - success
+      required: [join_code]
       properties:
-        success:
+        join_code:
+          type: string
+          minLength: 6
+          maxLength: 6
+          example: "ABC123"
+    KickPlayerRequest:
+      type: object
+      required: [target_user_id]
+      properties:
+        target_user_id:
+          type: string
+          format: uuid
+    UpdatePlayerActiveStatusRequest:
+      type: object
+      required: [is_active]
+      properties:
+        is_active:
           type: boolean
-          enum: [true]
-
+    ErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
     HealthResponse:
       type: object
-      required:
-        - status
+      required: [status]
       properties:
         status:
           type: string
           enum: [ok]
-        connections:
-          type: integer
-          minimum: 0
-          example: 47
-
-    ErrorResponse:
-      type: object
-      required:
-        - error
-        - message
-      properties:
-        error:
-          type: string
-          description: Error code identifier
-          example: "empty_player_list"
-        message:
-          type: string
-          description: Human-readable error description
-          example: "target_player_ids must contain at least one player ID"
-        details:
-          type: object
-          description: Additional error context
-          additionalProperties: true
-
   responses:
     BadRequest:
-      description: Invalid request parameters
+      description: Invalid request
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
-          examples:
-            missingFields:
-              summary: Missing required fields
-              value:
-                error: "bad_request"
-                message: "Missing required fields: target_player_ids, type"
-            emptyPlayerList:
-              summary: Empty player list
-              value:
-                error: "empty_player_list"
-                message: "target_player_ids must contain at least one player ID"
-            invalidPlayerIdFormat:
-              summary: Invalid player ID format
-              value:
-                error: "invalid_format"
-                message: "Player IDs must start with 'usr_'"
-                details:
-                  invalid_ids: ["abc123", "usr_123", "user_456"]
-
     Unauthorized:
       description: Missing or invalid authentication
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
-          examples:
-            missingUserId:
-              summary: Missing user ID header
-              value:
-                error: "unauthorized"
-                message: "Missing required header: X-User-ID"
-            invalidUserIdFormat:
-              summary: User ID format invalid
-              value:
-                error: "unauthorized"
-                message: "Invalid user ID format"
-                details:
-                  format: "Expected pattern: ^usr_[a-zA-Z0-9]+$"
-
+    Forbidden:
+      description: Not allowed to perform this action
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Conflict with current resource state
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
     InternalServerError:
       description: Internal server error
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
-          examples:
-            connectionPoolError:
-              summary: Connection pool exhausted
-              value:
-                error: "connection_error"
-                message: "Failed to access connection pool"
-                details:
-                  available_connections: 0
-                  max_connections: 1000

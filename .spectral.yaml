@@ -1,0 +1,5 @@
+# Spectral configuration for OpenAPI linting
+extends:
+  - "spectral:oas"
+formats:
+  - "oas3.1"
