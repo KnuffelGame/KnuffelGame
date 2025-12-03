@@ -28,19 +28,19 @@ func TestNewTestConfig_Values(t *testing.T) {
 	}
 }
 
-// TestNewTestRouter_APIGatewayInjection ensures we can inject a mocked APIGateway BaseURL into cfg.
-func TestNewTestRouter_APIGatewayInjection(t *testing.T) {
+// TestNewTestRouter_AuthServiceInjection ensures we can inject a mocked AuthService BaseURL into cfg.
+func TestNewTestRouter_AuthServiceInjection(t *testing.T) {
 	cfg := NewTestConfig()
 	log := NewTestLogger()
 
-	// Mock gateway URL (not used in this test; just verify injection)
+	// Mock auth service URL (not used in this test; just verify injection)
 	mockBase := "http://127.0.0.1:9999"
 	h := NewTestRouter(cfg, log, mockBase)
 	if h == nil {
 		t.Fatal("NewTestRouter returned nil")
 	}
-	if cfg.APIGatewayBaseURL != mockBase {
-		t.Fatalf("APIGatewayBaseURL = %q, want %q", cfg.APIGatewayBaseURL, mockBase)
+	if cfg.AuthServiceBaseURL != mockBase {
+		t.Fatalf("AuthServiceBaseURL = %q, want %q", cfg.AuthServiceBaseURL, mockBase)
 	}
 }
 
@@ -63,5 +63,33 @@ func TestNewTestRouter_HealthcheckMounted(t *testing.T) {
 	body, _ := io.ReadAll(rec.Body)
 	if string(body) != "{\"status\":\"ok\"}\n" && string(body) != "{\"status\":\"ok\"}" {
 		t.Fatalf("body = %q, want {\"status\":\"ok\"}", string(body))
+	}
+}
+
+// TestNewTestRouter_WithNilConfig uses default config when nil provided.
+func TestNewTestRouter_WithNilConfig(t *testing.T) {
+	log := NewTestLogger()
+	h := NewTestRouter(nil, log, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/healthcheck", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /healthcheck => status %d, want 200", rec.Code)
+	}
+}
+
+// TestNewTestRouter_WithNilLogger uses default logger when nil provided.
+func TestNewTestRouter_WithNilLogger(t *testing.T) {
+	cfg := NewTestConfig()
+	h := NewTestRouter(cfg, nil, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/healthcheck", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /healthcheck => status %d, want 200", rec.Code)
 	}
 }

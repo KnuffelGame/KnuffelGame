@@ -29,9 +29,12 @@ type Config struct {
 	JWTCookieName string
 	InternalToken string // env SSE_INTERNAL_TOKEN; required for /internal
 
+	// External service URLs
+	AuthServiceBaseURL  string // base URL to call AuthService POST /internal/validate
+	LobbyServiceBaseURL string // base URL to call LobbyService GET /internal/lobbies/{lobby_id}
+
 	// SSE behavior
 	HeartbeatInterval time.Duration // default 30s
-	APIGatewayBaseURL string        // for authorizer calls (future use)
 }
 
 // Load reads configuration values from environment variables with sensible defaults.
@@ -54,8 +57,10 @@ func Load() *Config {
 		JWTCookieName: getenvDefault("JWT_COOKIE_NAME", "jwt"),
 		InternalToken: os.Getenv("SSE_INTERNAL_TOKEN"),
 
+		AuthServiceBaseURL:  os.Getenv("AUTH_SERVICE_BASE_URL"),
+		LobbyServiceBaseURL: os.Getenv("LOBBY_SERVICE_BASE_URL"),
+
 		HeartbeatInterval: parseHeartbeatEnv("HEARTBEAT_INTERVAL_MS", 30_000), // ms
-		APIGatewayBaseURL: os.Getenv("APIGATEWAY_BASE_URL"),
 	}
 	return cfg
 }

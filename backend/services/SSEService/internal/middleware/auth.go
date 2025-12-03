@@ -40,9 +40,9 @@ func AuthMiddleware(cfg *models.Config, baseLog *slog.Logger) func(next http.Han
 		cookieName = cfg.JWTCookieName
 	}
 	validateURL := ""
-	if cfg != nil && cfg.APIGatewayBaseURL != "" {
-		// AuthService validate endpoint proxied via APIGateway
-		validateURL = cfg.APIGatewayBaseURL + "/internal/validate"
+	if cfg != nil && cfg.AuthServiceBaseURL != "" {
+		// Direct AuthService validation endpoint
+		validateURL = cfg.AuthServiceBaseURL + "/internal/validate"
 	}
 	client := &http.Client{Timeout: 3 * time.Second}
 
@@ -63,7 +63,7 @@ func AuthMiddleware(cfg *models.Config, baseLog *slog.Logger) func(next http.Han
 
 			if validateURL == "" {
 				// Without validation endpoint, we cannot authenticate
-				log.Error("APIGatewayBaseURL missing; cannot validate JWT")
+				log.Error("AuthServiceBaseURL missing; cannot validate JWT")
 				handlers.Unauthorized(w, "Invalid or expired authentication token", log)
 				return
 			}

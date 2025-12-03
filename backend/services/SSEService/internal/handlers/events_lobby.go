@@ -15,12 +15,12 @@ import (
 )
 
 // SubscribeLobbyEvents returns an SSE handler for lobby subscriptions.
-// Validates lobby_id, requires X-User-ID header (middleware to be added later),
+// Validates lobby_id (UUID v4), requires X-User-ID header (middleware to be added later),
 // registers the connection in the registry, writes SSE frames, sends heartbeats,
 // and performs cleanup on disconnect.
 func SubscribeLobbyEvents(reg *models.Registry, cfg *models.Config, baseLog *slog.Logger) http.HandlerFunc {
 	var (
-		idRe = regexp.MustCompile(`^lby_[a-zA-Z0-9]+$`)
+		uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 	)
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -29,10 +29,10 @@ func SubscribeLobbyEvents(reg *models.Registry, cfg *models.Config, baseLog *slo
 			slog.String("target_type", "lobby"),
 		)
 
-		// Validate lobby_id path param
+		// Validate lobby_id path param (UUID v4 format)
 		lobbyID := chi.URLParam(r, "lobby_id")
-		if lobbyID == "" || !idRe.MatchString(lobbyID) {
-			BadRequest(w, "Invalid lobby_id format", map[string]interface{}{"lobby_id": lobbyID}, log)
+		if lobbyID == "" || !uuidRe.MatchString(lobbyID) {
+			BadRequest(w, "Invalid lobby_id format (must be UUID v4)", map[string]interface{}{"lobby_id": lobbyID}, log)
 			return
 		}
 		log = log.With(slog.String("target_id", lobbyID))
@@ -52,15 +52,13 @@ func SubscribeLobbyEvents(reg *models.Registry, cfg *models.Config, baseLog *slo
 			return
 		}
 
-		// SSE headers
+		// SSE headers (no retry directive per spec)
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
-		// Disable proxy buffering (nginx)
 		w.Header().Set("X-Accel-Buffering", "no")
 
-		// Initial flush to establish stream
-		writeRetryLine(w, 5000)
+		// Initial flush to establish stream (no retry line per spec)
 		flusher.Flush()
 
 		// Register connection
@@ -105,7 +103,8 @@ func SubscribeLobbyEvents(reg *models.Registry, cfg *models.Config, baseLog *slo
 			case <-conn.Done:
 				break loop
 			case t := <-ticker.C:
-				payload := map[string]string{"timestamp": t.UTC().Format(time.RFC3339)}
+				// Numeric epoch milliseconds for timestamp
+				payload := map[string]interface{}{"timestamp": t.UTC().UnixNano() / 1000000}
 				data, _ := json.Marshal(payload)
 				// non-blocking heartbeat send to avoid stalls
 				select {
@@ -120,14 +119,6 @@ func SubscribeLobbyEvents(reg *models.Registry, cfg *models.Config, baseLog *slo
 		reg.RemoveConnection(models.TargetType("lobby"), lobbyID, userID)
 		log.Info("client disconnected")
 	}
-}
-
-// writeRetryLine optionally communicates client retry delay.
-func writeRetryLine(w http.ResponseWriter, ms int) {
-	if ms <= 0 {
-		return
-	}
-	fmt.Fprintf(w, "retry: %d\n\n", ms)
 }
 
 // writeSSE writes a single SSE event frame.

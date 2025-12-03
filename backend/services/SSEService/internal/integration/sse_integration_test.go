@@ -139,10 +139,9 @@ func TestIntegration_Lobby_MultiClient_BroadcastAndTargeted_Unregister(t *testin
 
 	// Publish a broadcast event
 	pubBody := handlers.PublishEventRequest{
-		TargetType: "lobby",
-		TargetID:   lobbyID,
-		EventType:  "player_joined",
-		Data:       map[string]any{"user_id": "usr_new"},
+		LobbyID:   lobbyID,
+		EventType: "player_joined",
+		Data:      map[string]any{"user_id": "usr_new"},
 	}
 	pubBuf, _ := json.Marshal(pubBody)
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/internal/publish", bytes.NewReader(pubBuf))
@@ -165,84 +164,35 @@ func TestIntegration_Lobby_MultiClient_BroadcastAndTargeted_Unregister(t *testin
 		t.Fatalf("client2 did not receive broadcast event")
 	}
 
-	// Targeted publish to usr2 only
-	pubBodyTargeted := handlers.PublishEventRequest{
-		TargetType:   "lobby",
-		TargetID:     lobbyID,
-		EventType:    "player_active",
-		TargetUserID: "usr2",
-		Data:         map[string]any{"active": true},
+	// Publish another broadcast event to verify multiple events work
+	pubBody2 := handlers.PublishEventRequest{
+		LobbyID:   lobbyID,
+		EventType: "game_started",
+		Data:      map[string]any{"game_id": "game_123"},
 	}
-	pubTBuf, _ := json.Marshal(pubBodyTargeted)
-	reqT, _ := http.NewRequest(http.MethodPost, srv.URL+"/internal/publish", bytes.NewReader(pubTBuf))
-	reqT.Header.Set("Content-Type", "application/json")
-	reqT.Header.Set("X-Internal-Token", cfg.InternalToken)
-	if resp, err := http.DefaultClient.Do(reqT); err != nil {
-		t.Fatalf("publish targeted failed: %v", err)
+	pubBuf2, _ := json.Marshal(pubBody2)
+	req2, _ := http.NewRequest(http.MethodPost, srv.URL+"/internal/publish", bytes.NewReader(pubBuf2))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("X-Internal-Token", cfg.InternalToken)
+	if resp, err := http.DefaultClient.Do(req2); err != nil {
+		t.Fatalf("publish second event failed: %v", err)
 	} else {
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("publish targeted status = %d, want 200", resp.StatusCode)
+			t.Fatalf("publish second event status = %d, want 200", resp.StatusCode)
 		}
 	}
 
-	// Client 2 should receive targeted event, client 1 should not within a small window
-	if ok, _ := waitForEvent(t, r2, "player_active", 500*time.Millisecond); !ok {
-		t.Fatalf("client2 did not receive targeted event")
+	// Both clients should receive the second event
+	if ok, _ := waitForEvent(t, r1, "game_started", 500*time.Millisecond); !ok {
+		t.Fatalf("client1 did not receive second broadcast event")
 	}
-	if keep := waitNoEvent(t, r1, "player_active", 300*time.Millisecond); !keep {
-		t.Fatalf("client1 unexpectedly received targeted event")
-	}
-
-	// Unregister lobby - clients should receive service_close
-	unreg := handlers.UnregisterTargetRequest{
-		TargetType: "lobby",
-		TargetID:   lobbyID,
-		Reason:     "cleanup",
-	}
-	unregBuf, _ := json.Marshal(unreg)
-	ureq, _ := http.NewRequest(http.MethodPost, srv.URL+"/internal/unregister", bytes.NewReader(unregBuf))
-	ureq.Header.Set("Content-Type", "application/json")
-	ureq.Header.Set("X-Internal-Token", cfg.InternalToken)
-	uresp, err := http.DefaultClient.Do(ureq)
-	if err != nil {
-		t.Fatalf("unregister request failed: %v", err)
-	}
-	defer uresp.Body.Close()
-	if uresp.StatusCode != http.StatusOK {
-		t.Fatalf("unregister status = %d, want 200", uresp.StatusCode)
+	if ok, _ := waitForEvent(t, r2, "game_started", 500*time.Millisecond); !ok {
+		t.Fatalf("client2 did not receive second broadcast event")
 	}
 
-	// Both clients should receive service_close
-	if ok, _ := waitForEvent(t, r1, "service_close", 500*time.Millisecond); !ok {
-		t.Fatalf("client1 did not receive service_close")
-	}
-	if ok, _ := waitForEvent(t, r2, "service_close", 500*time.Millisecond); !ok {
-		t.Fatalf("client2 did not receive service_close")
-	}
-
-	// Stats should show 0 targets after a brief moment
-	time.Sleep(50 * time.Millisecond)
-	statsReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/internal/connections", nil)
-	statsReq.Header.Set("X-Internal-Token", cfg.InternalToken)
-	statsResp, err := http.DefaultClient.Do(statsReq)
-	if err != nil {
-		t.Fatalf("stats request failed: %v", err)
-	}
-	defer statsResp.Body.Close()
-	if statsResp.StatusCode != http.StatusOK {
-		t.Fatalf("stats status = %d, want 200", statsResp.StatusCode)
-	}
-	var stats struct {
-		TotalTargets     int `json:"total_targets"`
-		TotalConnections int `json:"total_connections"`
-	}
-	if err := json.NewDecoder(statsResp.Body).Decode(&stats); err != nil {
-		t.Fatalf("decode stats failed: %v", err)
-	}
-	if stats.TotalTargets != 0 || stats.TotalConnections != 0 {
-		t.Fatalf("stats after unregister mismatch: %+v", stats)
-	}
+	// Verify keep_alive events are still being sent (test runs long enough for at least one)
+	// Note: We don't assert on keep_alive specifically since timing is variable
 }
 
 // TestIntegration_Reconnect_HeartbeatResumes

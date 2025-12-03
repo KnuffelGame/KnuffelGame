@@ -86,10 +86,10 @@ graph TB
 ```
 
 -   **Client:** Eine in React geschriebene Single-Page-Application, die mit dem Backend über eine REST-API und einen SSE-Stream kommuniziert.
--   **API Gateway:** Der zentrale Einstiegspunkt für alle Client-Anfragen. Er validiert JWTs, leitet Anfragen an die entsprechenden Backend-Services weiter und fügt den User-Context als Header hinzu.
+-   **API Gateway:** Zentraler Router für REST-Aufrufe. Er validiert JWTs für REST über den Auth-Service und leitet die Anfrage mit angereicherten Headern (`X-User-ID`, `X-Username`) an den passenden Service weiter. Die SSE-Authentifizierung wird nicht über das Gateway vermittelt; sie erfolgt direkt im SSE-Service gegen den Auth-Service (POST `/internal/validate`) via JWTCookie.
 -   **Backend Services:** Unabhängige Go-Anwendungen, die jeweils eine spezifische Geschäftslogik kapseln.
 -   **Datenbank:** Eine PostgreSQL-Instanz, die die Daten für den Lobby- und Game-Service speichert.
--   **Real-Time Events:** Der SSE-Service verwaltet alle Echtzeit-Verbindungen und verteilt Events, die von anderen Services veröffentlicht werden.
+-   **Real-Time Events:** Der SSE-Service stellt einen einzigen öffentlichen Stream bereit: `GET /events/lobby/{lobby_id}` (UUID v4). Adressierung ausschließlich über `lobby_id`. Authentifizierung via JWTCookie; Validierung direkt im SSE-Service gegen den Auth-Service (POST `/internal/validate`). Mitgliedschaftsprüfung über LobbyService (`GET /internal/lobbies/{lobby_id}`, ohne Auth): 404 wenn Lobby fehlt, 403 wenn kein Mitglied. Keep-alive pro Verbindung alle 30s; keine `retry`-Direktive. `event_type` ist frei (1–128 Zeichen), `keep_alive` ist reserviert. `data` ist immer ein JSON-Objekt; `data.timestamp` wird serverseitig als Unix-Epoch Millisekunden (Zahl) gesetzt/überschrieben. Rate-Limits im MVP deaktiviert.
 
 ---
 
@@ -129,9 +129,18 @@ graph TB
 
 ### SSE Service
 
--   **Verantwortlichkeit:** Dieser Service ist das Herzstück der Echtzeit-Kommunikation. Er verwaltet eine In-Memory-Map aller aktiven SSE-Verbindungen, gruppiert nach Lobby- oder Game-IDs. Andere Backend-Services (Lobby, Game) senden Events an den SSE-Service, der diese dann an alle relevanten, verbundenen Clients weiterleitet.
+-   **Verantwortlichkeit:** Echtzeit-Streaming-Layer mit einem einzigen öffentlichen Stream für Lobby-Zuschauer.
+    - Einziger öffentlicher Stream: `GET /events/lobby/{lobby_id}` (UUID v4)
+    - Event-Verteilung ausschließlich über `lobby_id`
+    - `event_type` frei (1–128 Zeichen), `keep_alive` vom Service reserviert
+    - `data` ist immer ein JSON-Objekt; `timestamp` (Unix-Epoch Millisekunden, Zahl) wird serverseitig gesetzt/überschrieben
+    - Keep-alive pro Verbindung alle 30s; keine `retry`-Direktive
+    - JWT-Validierung direkt gegen AuthService (POST `/internal/validate`) via Cookie `jwt`
+    - Mitgliedschaftsprüfung über LobbyService `GET /internal/lobbies/{lobby_id}` (ohne Auth): 404 wenn Lobby fehlt, 403 wenn kein Mitglied
+    - Interne Endpunkte nur: `POST /internal/publish`, `GET /healthcheck` (keine register/unregister/connections)
 -   **Technologie:** Go.
 -   **Spezifikation:** [`openapi.yaml`](./backend/services/SSEService/openapi.yaml)
+-   **Weitere Details:** [`README.md`](./backend/services/SSEService/README.md)
 
 ---
 

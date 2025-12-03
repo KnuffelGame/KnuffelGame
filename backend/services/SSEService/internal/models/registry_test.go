@@ -165,10 +165,10 @@ func TestBroadcast_NonBlockingSend_FullChannel_SchedulesCleanup(t *testing.T) {
 
 func TestUnregisterTarget_ClosesAllAndRemoves(t *testing.T) {
 	r := NewRegistry()
-	_, c1 := r.RegisterConnection(TargetTypeGame, "gam_x", "a")
-	_, c2 := r.RegisterConnection(TargetTypeGame, "gam_x", "b")
+	_, c1 := r.RegisterConnection(TargetTypeLobby, "lby_x", "a")
+	_, c2 := r.RegisterConnection(TargetTypeLobby, "lby_x", "b")
 
-	closed, ok := r.UnregisterTarget(TargetTypeGame, "gam_x")
+	closed, ok := r.UnregisterTarget(TargetTypeLobby, "lby_x")
 	if !ok {
 		t.Fatalf("UnregisterTarget returned ok=false")
 	}
@@ -181,21 +181,21 @@ func TestUnregisterTarget_ClosesAllAndRemoves(t *testing.T) {
 	expectDone(t, c2.Done, 50*time.Millisecond)
 
 	// target should be removed
-	if r.HasTarget(TargetTypeGame, "gam_x") {
+	if r.HasTarget(TargetTypeLobby, "lby_x") {
 		t.Fatalf("target still present after UnregisterTarget")
 	}
 }
 
 func TestStats_Aggregation(t *testing.T) {
 	r := NewRegistry()
-	// lobby with 2
+	// lobby with 2 connections
 	r.RegisterConnection(TargetTypeLobby, "lby_s1", "u1")
 	r.RegisterConnection(TargetTypeLobby, "lby_s1", "u2")
-	// game with 1
-	r.RegisterConnection(TargetTypeGame, "gam_s1", "u3")
+	// second lobby with 1 connection
+	r.RegisterConnection(TargetTypeLobby, "lby_s2", "u3")
 
 	totalTargets, totalConns, lobbyTargets, lobbyConns, gameTargets, gameConns := r.Stats()
-	if totalTargets != 2 || totalConns != 3 || lobbyTargets != 1 || lobbyConns != 2 || gameTargets != 1 || gameConns != 1 {
+	if totalTargets != 2 || totalConns != 3 || lobbyTargets != 2 || lobbyConns != 3 || gameTargets != 0 || gameConns != 0 {
 		t.Fatalf("stats mismatch: totals(%d,%d) lobby(%d,%d) game(%d,%d)", totalTargets, totalConns, lobbyTargets, lobbyConns, gameTargets, gameConns)
 	}
 }

@@ -207,24 +207,41 @@ func New(cfg *models.Config, log *slog.Logger) http.Handler {
 Example OpenAPI integration in handlers:
 
 ```go
-// PublishEventRequest mirrors OpenAPI schema exactly
+// PublishEventRequest mirrors OpenAPI schema (Variant B)
 type PublishEventRequest struct {
-    TargetType   string                 `json:"target_type"`              // "lobby" | "game"
-    TargetID     string                 `json:"target_id"`                // lby_* or gam_*
-    EventType    string                 `json:"event_type"`               // event name
-    TargetUserID string                 `json:"target_user_id,omitempty"` // optional
-    Data         map[string]interface{} `json:"data"`                     // payload
+    LobbyID   string                 `json:"lobby_id"`              // UUID v4
+    EventType string                 `json:"event_type"`            // non-empty, ≤128 chars; "keep_alive" is reserved (rejected)
+    Data      map[string]interface{} `json:"data,omitempty"`        // optional; must be an object if provided
 }
 
-// Validate against OpenAPI schema requirements
+// Validate against OpenAPI schema requirements (Variant B)
 func (req *PublishEventRequest) Validate() error {
-    if req.TargetType != "lobby" && req.TargetType != "game" {
-        return fmt.Errorf("target_type must be 'lobby' or 'game'")
+    lobbyID := strings.TrimSpace(req.LobbyID)
+    if lobbyID == "" {
+        return fmt.Errorf("lobby_id is required")
     }
-    if strings.TrimSpace(req.TargetID) == "" {
-        return fmt.Errorf("target_id is required")
+    if _, err := uuid.Parse(lobbyID); err != nil {
+        return fmt.Errorf("lobby_id must be a valid UUID v4")
     }
-    // ... additional validation
+
+    et := strings.TrimSpace(req.EventType)
+    if et == "" {
+        return fmt.Errorf("event_type is required")
+    }
+    if len(et) > 128 {
+        return fmt.Errorf("event_type must be ≤128 characters")
+    }
+    if et == "keep_alive" {
+        return fmt.Errorf("event_type 'keep_alive' is reserved")
+    }
+
+    // Data is optional but, if present, must be an object.
+    // The Go type map[string]interface{} already enforces "object" semantics.
+    // Reject non-object payloads at decode-time; here we ensure nil or object only.
+    if req.Data == nil {
+        return nil
+    }
+    // No additional structural validation here; rely on OpenAPI or business rules.
     return nil
 }
 ```
@@ -234,40 +251,48 @@ func (req *PublishEventRequest) Validate() error {
 For Server-Sent Events implementation:
 
 ```go
-// SSE Handler Pattern
+// SSE Handler Pattern (lobby-only subscriptions)
+// Notes:
+// - Addressing strictly via lobby_id (UUID v4).
+// - No retry directive is sent (clients manage backoff).
+// - Per-connection keep-alive every HEARTBEAT_INTERVAL_MS (default 30000ms).
+// - The service injects/overwrites data.timestamp as Unix epoch ms (number) for every event.
 func SubscribeLobbyEvents(reg *models.Registry, cfg *models.Config, baseLog *slog.Logger) http.HandlerFunc {
     return func(w http.ResponseWriter, r *http.Request) {
-        // Request-scoped logger
         log := requestLogger(r.Context(), baseLog).WithGroup("sse")
-        
-        // Validate required headers (from middleware)
+
+        // Auth already validated in middleware; X-User-ID is propagated for logging/registry
         userID := r.Header.Get("X-User-ID")
         if userID == "" {
             Unauthorized(w, "Missing authentication", log)
             return
         }
-        
-        // Verify Flusher support for streaming
+
+        // Validate lobby_id (UUID v4)
+        lobbyID := chi.URLParam(r, "lobby_id")
+        if _, err := uuid.Parse(strings.TrimSpace(lobbyID)); err != nil {
+            BadRequest(w, "Invalid lobby_id", map[string]interface{}{"reason": "must be UUID v4"}, log)
+            return
+        }
+
+        // Verify streaming support
         flusher, ok := w.(http.Flusher)
         if !ok {
             InternalServerError(w, "Streaming unsupported", nil, log)
             return
         }
-        
-        // Set SSE headers
+
+        // Set SSE headers (no retry directive is emitted)
         w.Header().Set("Content-Type", "text/event-stream")
         w.Header().Set("Cache-Control", "no-cache")
         w.Header().Set("Connection", "keep-alive")
         w.Header().Set("X-Accel-Buffering", "no") // nginx
-        
-        // Initial flush
-        writeRetryLine(w, 5000)
         flusher.Flush()
-        
-        // Register connection in registry
+
+        // Register connection (lobby-only addressing; no per-user streams)
         _, conn := reg.RegisterConnection(models.TargetType("lobby"), lobbyID, userID)
-        
-        // Writer goroutine for event delivery
+
+        // Writer goroutine: drain outbound messages to this connection
         go func() {
             for {
                 select {
@@ -277,35 +302,36 @@ func SubscribeLobbyEvents(reg *models.Registry, cfg *models.Config, baseLog *slo
                     if !ok {
                         return
                     }
+                    // msg.Data must serialize to JSON; service will ensure/overwrite timestamp field server-side
                     writeSSE(w, msg.Event, msg.Data)
                     flusher.Flush()
                 }
             }
         }()
-        
-        // Heartbeat management
-        hbInterval := time.Duration(30) * time.Second
+
+        // Per-connection keep-alive
+        hbInterval := 30 * time.Second
         if cfg != nil && cfg.HeartbeatInterval > 0 {
             hbInterval = cfg.HeartbeatInterval
         }
         ticker := time.NewTicker(hbInterval)
         defer ticker.Stop()
-        
-        // Stream loop with context cancellation
+
         for {
             select {
             case <-r.Context().Done():
                 return
             case <-conn.Done:
                 return
-            case t := <-ticker.C:
-                // Send heartbeat with backpressure handling
-                payload := map[string]string{"timestamp": t.UTC().Format(time.RFC3339)}
+            case <-ticker.C:
+                // Emit service-reserved keep_alive event; payload includes timestamp as epoch ms (number).
+                nowMs := time.Now().UTC().UnixMilli()
+                payload := map[string]interface{}{"timestamp": nowMs} // will be (re)written by service regardless
                 data, _ := json.Marshal(payload)
                 select {
                 case conn.Ch <- models.SSEMessage{Event: "keep_alive", Data: data}:
                 default:
-                    // Drop heartbeat if backpressure - cleanup will handle
+                    // Drop heartbeat on backpressure; cleanup handled elsewhere
                 }
             }
         }
@@ -318,47 +344,56 @@ func SubscribeLobbyEvents(reg *models.Registry, cfg *models.Config, baseLog *slo
 Call other services consistently:
 
 ```go
-// Auth middleware calling APIGateway
+// Auth middleware validating JWT directly against AuthService (no API Gateway mediation)
 func AuthMiddleware(cfg *models.Config, baseLog *slog.Logger) func(next http.Handler) http.Handler {
     client := &http.Client{Timeout: 3 * time.Second}
-    
+    cookieName := cfg.JWTCookieName
+    validateURL := cfg.AuthServiceBaseURL + "/internal/validate" // internal endpoint (isolated via reverse proxy)
+
     return func(next http.Handler) http.Handler {
         return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
             log := logger.Logger(r.Context()).WithGroup("middleware")
-            
-            // Validate JWT via APIGateway
-            validateURL := cfg.APIGatewayBaseURL + "/internal/validate"
+
+            // Extract JWT cookie
+            c, err := r.Cookie(cookieName)
+            if err != nil || c == nil || strings.TrimSpace(c.Value) == "" {
+                handlers.Unauthorized(w, "Missing authentication", log)
+                return
+            }
+
+            // Validate token with AuthService
             body, _ := json.Marshal(map[string]string{"token": c.Value})
             req, _ := http.NewRequest(http.MethodPost, validateURL, bytes.NewReader(body))
             req.Header.Set("Content-Type", "application/json")
-            req.Header.Set("X-Request-ID", rid) // propagate correlation
-            
+            // Internal endpoints are isolated; no public security scheme on /internal
+
             resp, err := client.Do(req)
-            if err != nil {
-                log.Error("token validation failed", slog.String("error", err.Error()))
+            if err != nil || resp.StatusCode != http.StatusOK {
+                if resp != nil {
+                    resp.Body.Close()
+                }
                 handlers.Unauthorized(w, "Invalid token", log)
                 return
             }
             defer resp.Body.Close()
-            
-            // Extract user context and propagate headers
+
             var v struct {
                 Valid    bool   `json:"valid"`
                 UserID   string `json:"user_id"`
                 Username string `json:"username"`
             }
-            _ = json.NewDecoder(resp.Body).Decode(&v)
-            
-            if v.Valid && v.UserID != "" {
-                r.Header.Set("X-User-ID", v.UserID)
-                r.Header.Set("X-Username", v.Username)
-                ctx := context.WithValue(r.Context(), userCtxKey{}, UserContext{
-                    UserID: v.UserID, Username: v.Username,
-                })
-                next.ServeHTTP(w, r.WithContext(ctx))
-            } else {
+            if err := json.NewDecoder(resp.Body).Decode(&v); err != nil || !v.Valid || v.UserID == "" {
                 handlers.Unauthorized(w, "Invalid token", log)
+                return
             }
+
+            // Propagate user context
+            r.Header.Set("X-User-ID", v.UserID)
+            r.Header.Set("X-Username", v.Username)
+            ctx := context.WithValue(r.Context(), userCtxKey{}, UserContext{
+                UserID: v.UserID, Username: v.Username,
+            })
+            next.ServeHTTP(w, r.WithContext(ctx))
         })
     }
 }
@@ -400,11 +435,9 @@ const (
 
 ```go
 type PublishEventRequest struct {
-    TargetType   string                 `json:"target_type"`
-    TargetID     string                 `json:"target_id"`
-    EventType    string                 `json:"event_type"`
-    TargetUserID string                 `json:"target_user_id,omitempty"`
-    Data         map[string]interface{} `json:"data"`
+    LobbyID   string                 `json:"lobby_id"`              // UUID v4
+    EventType string                 `json:"event_type"`            // non-empty, ≤128 chars; "keep_alive" is reserved (rejected)
+    Data      map[string]interface{} `json:"data,omitempty"`        // optional; must be an object if provided
 }
 ```
 
@@ -548,10 +581,9 @@ Use structured logging with `log/slog`:
 import "log/slog"
 
 log := logger.Logger(r.Context())
-log.Info("connection established", 
+log.Info("connection established",
     slog.String("user_id", userID),
-    slog.String("target_type", "lobby"),
-    slog.String("target_id", lobbyID),
+    slog.String("lobby_id", lobbyID),
 )
 ```
 
@@ -585,16 +617,14 @@ Log SSE lifecycle events:
 
 ```go
 // Connection events
-log.Info("client connected", 
-    slog.String("target_type", tt),
-    slog.String("target_id", id),
+log.Info("client connected",
+    slog.String("lobby_id", id),
     slog.String("user_id", userID),
 )
 
 // Publish events
 log.Info("publish completed",
-    slog.String("target_type", tt),
-    slog.String("target_id", req.TargetID),
+    slog.String("lobby_id", req.LobbyID),
     slog.String("event_type", req.EventType),
     slog.Int("connections_found", found),
     slog.Int("events_sent", sent),
@@ -614,7 +644,7 @@ Log service-to-service interactions:
 ```go
 log := logger.Logger(r.Context()).WithGroup("middleware").With(
     slog.String("action", "auth"),
-    slog.String("service", "APIGateway"),
+    slog.String("service", "AuthService"),
 )
 
 resp, err := client.Do(req)
@@ -672,11 +702,15 @@ if err := httpx.DecodeJSON(r, &req); err != nil {
 
 3. **Validate business logic**:
 ```go
-tt := strings.ToLower(strings.TrimSpace(req.TargetType))
-if tt != "lobby" && tt != "game" {
-    BadRequest(w, "Invalid target_type", map[string]interface{}{"allowed": []string{"lobby", "game"}}, log)
+if err := req.Validate(); err != nil {
+    BadRequest(w, "Invalid request", map[string]interface{}{"detail": err.Error()}, log)
     return
 }
+// Additional publish rules:
+// - event_type "keep_alive" -> 400
+// - data present but not an object -> 400 (enforced at decode/validate)
+// - unknown lobby -> 404
+// - zero connections -> 200 with counters = 0
 ```
 
 4. **Process with error handling**:
@@ -690,8 +724,7 @@ if err != nil {
 
 5. **Return response**:
 ```go
-log.Info("publish completed", 
-    slog.String("target_type", tt),
+log.Info("publish completed",
     slog.Int("events_sent", sent),
 )
 httpx.WriteJSON(w, http.StatusOK, resp, log)
@@ -699,35 +732,30 @@ httpx.WriteJSON(w, http.StatusOK, resp, log)
 
 ### SSE Handler Patterns
 
-SSE handlers require special consideration:
+SSE handlers require special consideration (lobby-only; no per-user streams; no retry directive):
 
 ```go
 func SubscribeLobbyEvents(reg *models.Registry, cfg *models.Config, baseLog *slog.Logger) http.HandlerFunc {
     return func(w http.ResponseWriter, r *http.Request) {
-        // Early validation
         userID := r.Header.Get("X-User-ID")
         if userID == "" {
-            Unauthorized(w, "Missing authentication", log)
+            Unauthorized(w, "Missing authentication", requestLogger(r.Context(), baseLog))
             return
         }
-        
-        // Verify streaming support
+
         flusher, ok := w.(http.Flusher)
         if !ok {
-            InternalServerError(w, "Streaming unsupported", nil, log)
+            InternalServerError(w, "Streaming unsupported", nil, requestLogger(r.Context(), baseLog))
             return
         }
-        
-        // Set SSE headers
+
         w.Header().Set("Content-Type", "text/event-stream")
         w.Header().Set("Cache-Control", "no-cache")
         w.Header().Set("Connection", "keep-alive")
-        
-        // Immediate flush to establish stream
-        writeRetryLine(w, 5000)
-        flusher.Flush()
-        
-        // Register and manage connection...
+        flusher.Flush() // do NOT emit an SSE retry directive
+
+        // Register and manage connection... keep-alive every HEARTBEAT_INTERVAL_MS (default 30000ms).
+        // The service injects/overwrites data.timestamp as numeric epoch ms for every event (including keep_alive).
     }
 }
 ```
@@ -794,7 +822,8 @@ func TestAuthMiddleware(t *testing.T) {
 Test SSE streams with deterministic timing:
 
 ```go
-// waitForEvent scans SSE stream until event observed
+// waitForEvent scans SSE stream until event observed.
+// Assert that no "retry:" directive is ever received (MVP omits it).
 func waitForEvent(t *testing.T, r *bufio.Reader, event string, timeout time.Duration) (bool, string) {
     deadline := time.Now().Add(timeout)
     for time.Now().Before(deadline) {
@@ -809,8 +838,11 @@ func waitForEvent(t *testing.T, r *bufio.Reader, event string, timeout time.Dura
             }
             return false, ""
         }
-        // Skip comments and retry directives
-        if line == "\n" || strings.HasPrefix(line, ":") || strings.HasPrefix(line, "retry: ") {
+        if strings.HasPrefix(line, "retry: ") {
+            t.Fatalf("unexpected retry directive in SSE stream")
+        }
+        // Skip comments and blank lines
+        if line == "\n" || strings.HasPrefix(line, ":") {
             continue
         }
         if strings.HasPrefix(line, "event: ") {
@@ -842,6 +874,18 @@ func openSSE(t *testing.T, url string, jwtValue string, timeout time.Duration) (
     }
     return resp, bufio.NewReader(resp.Body)
 }
+
+// Example publish validation tests:
+// - reject keep_alive
+// - reject non-object data
+func TestPublish_Validation(t *testing.T) {
+    // keep_alive rejected
+    req := PublishEventRequest{LobbyID: uuid.NewString(), EventType: "keep_alive"}
+    if err := req.Validate(); err == nil {
+        t.Fatalf("expected error for reserved event_type keep_alive")
+    }
+    // non-object data would be rejected at decode-time; simulate by attempting to assign wrong type in handler tests
+}
 ```
 
 ### Integration Testing
@@ -849,30 +893,54 @@ func openSSE(t *testing.T, url string, jwtValue string, timeout time.Duration) (
 Create comprehensive integration tests with mock services:
 
 ```go
-func TestIntegration_Lobby_MultiClient_BroadcastAndTargeted_Unregister(t *testing.T) {
-    // Mock APIGateway
-    gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        switch {
-        case r.Method == http.MethodPost && r.URL.Path == "/internal/validate":
-            // Mock validation logic
-        case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/lobbies/"):
-            // Mock membership check
-        }
-    }))
-    t.Cleanup(gw.Close)
+func TestIntegration_Lobby_MultiClient_Broadcast(t *testing.T) {
+    lobbyID := uuid.NewString()
 
-    // Test configuration with short heartbeats
+    // Mock AuthService and LobbyService (internal endpoints)
+    auth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        if r.Method == http.MethodPost && r.URL.Path == "/internal/validate" {
+            _ = json.NewEncoder(w).Encode(map[string]any{
+                "valid":    true,
+                "user_id":  "usr1",
+                "username": "UserOne",
+            })
+            return
+        }
+        http.NotFound(w, r)
+    }))
+    t.Cleanup(auth.Close)
+
+    lobby := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        if r.Method == http.MethodGet && r.URL.Path == "/internal/lobbies/"+lobbyID {
+            // Return 200 for existing lobby and membership
+            _ = json.NewEncoder(w).Encode(map[string]any{"id": lobbyID})
+            return
+        }
+        http.NotFound(w, r)
+    }))
+    t.Cleanup(lobby.Close)
+
     cfg := testutil.NewTestConfig()
     cfg.HeartbeatInterval = 100 * time.Millisecond
-    
-    // Run test scenarios
-    resp1, r1 := openSSE(t, srv.URL+"/events/lobby/"+lobbyID, "t1", 2*time.Second)
+    cfg.AuthServiceBaseURL = auth.URL
+    cfg.LobbyServiceBaseURL = lobby.URL
+
+    // Open SSE client (lobby-only)
+    resp1, r1 := openSSE(t, srv.URL+"/events/lobby/"+lobbyID, "valid_token", 2*time.Second)
     defer resp1.Body.Close()
-    
-    // Test broadcast and targeted messages
-    publishEvent(t, "player_joined", lobbyID)
-    if !waitForEvent(t, r1, "player_joined", 500*time.Millisecond) {
+
+    // Publish broadcast event and expect receipt
+    publishEvent(t, "player_joined", lobbyID, map[string]any{"k": "v"})
+    ok, data := waitForEvent(t, r1, "player_joined", 1*time.Second)
+    if !ok {
         t.Fatalf("client did not receive broadcast event")
+    }
+
+    // Assert timestamp is numeric epoch ms and is present
+    var payload map[string]any
+    _ = json.Unmarshal([]byte(data), &payload)
+    if _, ok := payload["timestamp"].(float64); !ok {
+        t.Fatalf("timestamp missing or not numeric epoch ms")
     }
 }
 ```
@@ -913,24 +981,34 @@ Test middleware with proper context propagation:
 ```go
 func TestAuthMiddleware_Success(t *testing.T) {
     cfg := testutil.NewTestConfig()
-    gw := mockAPIGateway(t, cfg)
-    
-    r := testutil.NewTestRouter(cfg, testutil.NewTestLogger(), gw.URL)
-    
-    // Test authenticated request
-    req := httptest.NewRequest(http.MethodGet, "/events/lobby/test", nil)
+
+    // Mock AuthService /internal/validate
+    auth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        if r.Method == http.MethodPost && r.URL.Path == "/internal/validate" {
+            _ = json.NewEncoder(w).Encode(map[string]any{
+                "valid":    true,
+                "user_id":  "usr1",
+                "username": "UserOne",
+            })
+            return
+        }
+        http.NotFound(w, r)
+    }))
+    t.Cleanup(auth.Close)
+
+    cfg.AuthServiceBaseURL = auth.URL
+
+    r := testutil.NewTestRouter(cfg, testutil.NewTestLogger())
+
+    // Authenticated request
+    req := httptest.NewRequest(http.MethodGet, "/events/lobby/"+uuid.NewString(), nil)
     req.AddCookie(&http.Cookie{Name: "jwt", Value: "valid_token"})
-    
+
     rec := httptest.NewRecorder()
     r.ServeHTTP(rec, req)
-    
+
     if rec.Code != http.StatusOK {
         t.Fatalf("expected 200, got %d", rec.Code)
-    }
-    
-    // Verify headers were set
-    if rec.Header().Get("X-User-ID") == "" {
-        t.Fatal("X-User-ID header not set")
     }
 }
 ```
@@ -940,27 +1018,29 @@ func TestAuthMiddleware_Success(t *testing.T) {
 Use httptest for mock services:
 
 ```go
-func mockAPIGateway(t *testing.T, cfg *models.Config) *httptest.Server {
+func mockAuthService(t *testing.T, valid bool) *httptest.Server {
     return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        switch r.Method {
-        case http.MethodPost:
-            if r.URL.Path == "/internal/validate" {
-                w.Header().Set("Content-Type", "application/json")
-                _ = json.NewEncoder(w).Encode(map[string]interface{}{
-                    "valid":    true,
-                    "user_id":  "test_user",
-                    "username": "TestUser",
-                })
-                return
+        if r.Method == http.MethodPost && r.URL.Path == "/internal/validate" {
+            _ = json.NewEncoder(w).Encode(map[string]any{
+                "valid":    valid,
+                "user_id":  "test_user",
+                "username": "TestUser",
+            })
+            return
+        }
+        http.NotFound(w, r)
+    }))
+}
+
+func mockLobbyService(t *testing.T, lobbyID string, status int) *httptest.Server {
+    return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        if r.Method == http.MethodGet && r.URL.Path == "/internal/lobbies/"+lobbyID {
+            if status == http.StatusOK {
+                _ = json.NewEncoder(w).Encode(map[string]any{"id": lobbyID})
+            } else {
+                w.WriteHeader(status) // 404 if lobby missing; 403 if not a member
             }
-        case http.MethodGet:
-            if strings.HasPrefix(r.URL.Path, "/lobbies/") {
-                w.Header().Set("Content-Type", "application/json")
-                _ = json.NewEncoder(w).Encode(map[string]interface{}{
-                    "players": []map[string]string{{"user_id": "test_user"}},
-                })
-                return
-            }
+            return
         }
         http.NotFound(w, r)
     }))
@@ -983,24 +1063,27 @@ type Config struct {
     ServiceName string
     LogLevel    string
     LogColor    bool
-    
-    // CORS
+
+    // CORS (configurable; do not set defaults here)
     CORSAllowOrigins     []string
     CORSAllowMethods     []string
     CORSAllowHeaders     []string
     CORSAllowCredentials bool
-    
-    // Rate limiting
-    RateLimitInternalPerMinute int
-    RateLimitSSEPerMinute      int
-    
+
+    // Rate limiting (disabled in MVP)
+    RateLimitInternalPerMinute int // keep configurable; 0 disables
+    RateLimitSSEPerMinute      int // keep configurable; 0 disables
+
     // Auth
     JWTCookieName string
     InternalToken string
-    
+
     // Service-specific
-    HeartbeatInterval time.Duration
-    APIGatewayBaseURL string
+    HeartbeatInterval time.Duration // derived from HEARTBEAT_INTERVAL_MS
+
+    // Internal service base URLs (isolated via reverse proxy)
+    AuthServiceBaseURL  string
+    LobbyServiceBaseURL string
 }
 ```
 
@@ -1015,20 +1098,25 @@ func Load() *Config {
         ServiceName: getenvDefault("SERVICE_NAME", "SSEService"),
         LogLevel:    getenvDefault("LOG_LEVEL", "info"),
         LogColor:    parseBoolEnv("LOG_COLOR", false),
-        
-        CORSAllowOrigins:     parseCSVEnv("CORS_ALLOW_ORIGINS", []string{"http://localhost:5173"}),
-        CORSAllowMethods:     parseCSVEnv("CORS_ALLOW_METHODS", []string{"GET", "POST", "OPTIONS"}),
-        CORSAllowHeaders:     parseCSVEnv("CORS_ALLOW_HEADERS", []string{"Accept", "Authorization", "Content-Type"}),
+
+        // CORS: emphasize configurability; do not set defaults here
+        CORSAllowOrigins:     parseCSVEnv("CORS_ALLOW_ORIGINS", nil),
+        CORSAllowMethods:     parseCSVEnv("CORS_ALLOW_METHODS", nil),
+        CORSAllowHeaders:     parseCSVEnv("CORS_ALLOW_HEADERS", nil),
         CORSAllowCredentials: parseBoolEnv("CORS_ALLOW_CREDENTIALS", true),
-        
-        RateLimitInternalPerMinute: parseIntEnv("RATE_LIMIT_INTERNAL_PER_MINUTE", 60),
+
+        // Rate limits: disabled in MVP; keep configurable
+        RateLimitInternalPerMinute: parseIntEnv("RATE_LIMIT_INTERNAL_PER_MINUTE", 0),
         RateLimitSSEPerMinute:      parseIntEnv("RATE_LIMIT_SSE_PER_MINUTE", 0),
-        
+
         JWTCookieName: getenvDefault("JWT_COOKIE_NAME", "jwt"),
         InternalToken: os.Getenv("SSE_INTERNAL_TOKEN"),
-        
+
         HeartbeatInterval: parseHeartbeatEnv("HEARTBEAT_INTERVAL_MS", 30_000),
-        APIGatewayBaseURL: os.Getenv("APIGATEWAY_BASE_URL"),
+
+        // Internal service base URLs
+        AuthServiceBaseURL:  os.Getenv("AUTH_SERVICE_BASE_URL"),
+        LobbyServiceBaseURL: os.Getenv("LOBBY_SERVICE_BASE_URL"),
     }
     return cfg
 }
@@ -1075,18 +1163,16 @@ Validate critical configuration early:
 ```go
 func main() {
     cfg := config.Load()
-    
-    // Validate required configuration
-    if cfg.JWTSecret == "" {
-        log.Warn("JWT_SECRET is empty; token operations will fail")
-    }
-    
+
+    // Validate required configuration (warnings for missing internals)
     if cfg.InternalToken == "" {
-        log.Warn("SSE_INTERNAL_TOKEN is empty; internal endpoints will be blocked")
+        log.Warn("SSE_INTERNAL_TOKEN is empty; internal endpoints may be inaccessible behind reverse proxy")
     }
-    
-    if cfg.APIGatewayBaseURL == "" {
-        log.Warn("APIGATEWAY_BASE_URL is empty; membership checks will fail")
+    if cfg.AuthServiceBaseURL == "" {
+        log.Warn("AUTH_SERVICE_BASE_URL is empty; JWT validation will fail")
+    }
+    if cfg.LobbyServiceBaseURL == "" {
+        log.Warn("LOBBY_SERVICE_BASE_URL is empty; membership checks will fail")
     }
 }
 ```
@@ -1120,7 +1206,8 @@ SSE_INTERNAL_TOKEN=change_me
 HEARTBEAT_INTERVAL_MS=30000
 
 # Service Integration
-APIGATEWAY_BASE_URL=http://localhost:8080
+AUTH_SERVICE_BASE_URL=http://localhost:8081
+LOBBY_SERVICE_BASE_URL=http://localhost:8083
 ```
 
 ---
@@ -1327,9 +1414,9 @@ type Registry struct {
     targets map[TargetKey]*TargetEntry
 }
 
-// Broadcast sends message to all or specific user's connection
-func (r *Registry) Broadcast(tt TargetType, id string, msg SSEMessage, targetUserID string) (found int, sent int, failed int, ok bool) {
-    key := MakeTargetKey(tt, id)
+// Broadcast sends message to all connections in a lobby (no per-user targeting in MVP)
+func (r *Registry) BroadcastLobby(id string, msg SSEMessage) (found int, sent int, failed int, ok bool) {
+    key := MakeTargetKey(TargetType("lobby"), id)
     
     // Collect recipients under read lock
     r.mu.RLock()
@@ -1339,15 +1426,9 @@ func (r *Registry) Broadcast(tt TargetType, id string, msg SSEMessage, targetUse
         return 0, 0, 0, false
     }
     
-    var recipients []*Connection
-    if targetUserID != "" {
-        if c, has := te.Connections[targetUserID]; has {
-            recipients = append(recipients, c)
-        }
-    } else {
-        for _, c := range te.Connections {
-            recipients = append(recipients, c)
-        }
+    recipients := make([]*Connection, 0, len(te.Connections))
+    for _, c := range te.Connections {
+        recipients = append(recipients, c)
     }
     r.mu.RUnlock()
     
@@ -1358,7 +1439,7 @@ func (r *Registry) Broadcast(tt TargetType, id string, msg SSEMessage, targetUse
             sent++
         default:
             failed++
-            go r.RemoveConnection(tt, id, c.UserID) // cleanup stalled
+            go r.RemoveConnection(TargetType("lobby"), id, c.UserID) // cleanup stalled
         }
     }
     
@@ -1450,27 +1531,19 @@ func InternalOnly(cfg *models.Config) func(http.Handler) http.Handler {
 Expose comprehensive health checks:
 
 ```go
-// GetConnectionStats returns registry statistics
+// GetConnectionStats returns registry statistics (lobby-only in MVP)
 func GetConnectionStats(reg *models.Registry) http.HandlerFunc {
     return func(w http.ResponseWriter, r *http.Request) {
         log := logger.Logger(r.Context())
-        
-        totalTargets, totalConnections, lobbyCount, lobbyConnections, gameCount, gameConnections := reg.Stats()
-        
+
+        // Example shape for MVP; avoid per-game metrics
+        totalTargets, totalConnections := reg.TotalStats() // hypothetical simplified API for illustration
         stats := map[string]interface{}{
-            "total_targets":        totalTargets,
-            "total_connections":    totalConnections,
-            "lobbies": map[string]interface{}{
-                "targets":     lobbyCount,
-                "connections": lobbyConnections,
-            },
-            "games": map[string]interface{}{
-                "targets":     gameCount,
-                "connections": gameConnections,
-            },
-            "timestamp": time.Now().UTC().Format(time.RFC3339),
+            "total_targets":     totalTargets,
+            "total_connections": totalConnections,
+            "timestamp_ms":      time.Now().UTC().UnixMilli(),
         }
-        
+
         httpx.WriteJSON(w, http.StatusOK, stats, log)
     }
 }
@@ -1485,30 +1558,32 @@ func GetConnectionStats(reg *models.Registry) http.HandlerFunc {
 Validate JWT tokens consistently across services:
 
 ```go
-// Auth middleware with JWT validation via AuthService
+// Auth middleware with JWT validation directly against AuthService (internal endpoint; no API Gateway mediation)
 func AuthMiddleware(cfg *models.Config, baseLog *slog.Logger) func(next http.Handler) http.Handler {
     client := &http.Client{Timeout: 3 * time.Second}
     cookieName := cfg.JWTCookieName
-    validateURL := cfg.APIGatewayBaseURL + "/internal/validate"
+    validateURL := cfg.AuthServiceBaseURL + "/internal/validate"
     
     return func(next http.Handler) http.Handler {
         return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
             // Extract JWT from cookie
             c, err := r.Cookie(cookieName)
-            if err != nil || c == nil || c.Value == "" {
-                handlers.Unauthorized(w, "Invalid or expired authentication token", log)
+            if err != nil || c == nil || strings.TrimSpace(c.Value) == "" {
+                handlers.Unauthorized(w, "Invalid or expired authentication token", logger.Logger(r.Context()))
                 return
             }
             
-            // Validate via AuthService
+            // Validate via AuthService (internal; reverse proxy isolation; no public security schemes)
             body, _ := json.Marshal(map[string]string{"token": c.Value})
             req, _ := http.NewRequest(http.MethodPost, validateURL, bytes.NewReader(body))
             req.Header.Set("Content-Type", "application/json")
-            req.Header.Set("X-Internal-Token", cfg.InternalToken)
             
             resp, err := client.Do(req)
-            if err != nil {
-                handlers.Unauthorized(w, "Invalid or expired authentication token", log)
+            if err != nil || resp.StatusCode != http.StatusOK {
+                if resp != nil {
+                    resp.Body.Close()
+                }
+                handlers.Unauthorized(w, "Invalid or expired authentication token", logger.Logger(r.Context()))
                 return
             }
             defer resp.Body.Close()
@@ -1519,7 +1594,7 @@ func AuthMiddleware(cfg *models.Config, baseLog *slog.Logger) func(next http.Han
                 Username string `json:"username"`
             }
             if err := json.NewDecoder(resp.Body).Decode(&v); err != nil || !v.Valid || v.UserID == "" {
-                handlers.Unauthorized(w, "Invalid or expired authentication token", log)
+                handlers.Unauthorized(w, "Invalid or expired authentication token", logger.Logger(r.Context()))
                 return
             }
             
@@ -1540,54 +1615,31 @@ func AuthMiddleware(cfg *models.Config, baseLog *slog.Logger) func(next http.Han
 Authorize resource access via service calls:
 
 ```go
-// AuthorizeLobbyMembership checks lobby membership via APIGateway
+// AuthorizeLobbyMembership checks lobby membership via LobbyService internal endpoint (no auth on /internal)
 func AuthorizeLobbyMembership(cfg *models.Config, baseLog *slog.Logger) func(next http.Handler) http.Handler {
     client := &http.Client{Timeout: 3 * time.Second}
-    cookieName := cfg.JWTCookieName
-    
+
     return func(next http.Handler) http.Handler {
         return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-            userID := r.Header.Get("X-User-ID")
-            if userID == "" {
-                handlers.Unauthorized(w, "Invalid authentication", log)
+            log := logger.Logger(r.Context()).WithGroup("middleware")
+
+            lobbyID := chi.URLParam(r, "lobby_id")
+            if _, err := uuid.Parse(strings.TrimSpace(lobbyID)); err != nil {
+                handlers.BadRequest(w, "Invalid lobby_id", map[string]interface{}{"reason": "must be UUID v4"}, log)
                 return
             }
-            
-            // Get lobby membership from APIGateway
-            lobbyID := chi.URLParam(r, "lobby_id")
-            req, _ := http.NewRequest(http.MethodGet, cfg.APIGatewayBaseURL+"/lobbies/"+lobbyID, nil)
-            
-            // Forward JWT cookie for gateway authorization
-            if c, err := r.Cookie(cookieName); err == nil && c != nil {
-                req.Header.Set("Cookie", cookieName+"="+c.Value)
-            }
-            
+
+            // Membership check (LobbyService: GET /internal/lobbies/{lobby_id})
+            req, _ := http.NewRequest(http.MethodGet, cfg.LobbyServiceBaseURL+"/internal/lobbies/"+lobbyID, nil)
             resp, err := client.Do(req)
             if err != nil {
                 handlers.InternalServerError(w, "Service unavailable", nil, log)
                 return
             }
             defer resp.Body.Close()
-            
+
             switch resp.StatusCode {
             case http.StatusOK:
-                // Verify user is in players list
-                var body struct {
-                    Players []struct{ UserID string } `json:"players"`
-                }
-                if err := json.NewDecoder(resp.Body).Decode(&body); err == nil {
-                    found := false
-                    for _, p := range body.Players {
-                        if p.UserID == userID {
-                            found = true
-                            break
-                        }
-                    }
-                    if !found {
-                        handlers.Forbidden(w, "You are not a member of this lobby", log)
-                        return
-                    }
-                }
                 next.ServeHTTP(w, r)
             case http.StatusForbidden:
                 handlers.Forbidden(w, "You are not a member of this lobby", log)
@@ -1843,10 +1895,12 @@ services:
     environment:
       - SERVICE_NAME=SSEService
       - LOG_LEVEL=info
-      - APIGATEWAY_BASE_URL=http://api-gateway:8080
+      - AUTH_SERVICE_BASE_URL=http://auth-service:8081
+      - LOBBY_SERVICE_BASE_URL=http://lobby-service:8083
       - SSE_INTERNAL_TOKEN=${SSE_INTERNAL_TOKEN}
     depends_on:
-      - api-gateway
+      - auth-service
+      - lobby-service
     networks:
       - backend
 ```
