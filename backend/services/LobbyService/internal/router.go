@@ -26,6 +26,7 @@ func New(repo repository.Repository, codeGen *joincode.Generator) http.Handler {
 	r.Route("/internal", func(r chi.Router) {
 		r.Route("/lobbies", func(r chi.Router) {
 			r.Put("/{lobby_id}/players/{player_id}/active", handlers.UpdatePlayerActiveStatusHandler(repo))
+			r.Get("/{lobby_id}", handlers.GetLobbyInternalHandler(repo))
 		})
 	})
 

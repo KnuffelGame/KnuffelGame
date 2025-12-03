@@ -17,6 +17,7 @@ Verweise:
   - [handlers.CreateLobbyHandler()](backend/services/LobbyService/internal/handlers/create_lobby.go:23) – POST /lobbies
   - [handlers.JoinLobbyHandler()](backend/services/LobbyService/internal/handlers/join_lobby.go:24) – POST /lobbies/join
   - [handlers.GetLobbyHandler()](backend/services/LobbyService/internal/handlers/get_lobby.go:20) – GET /lobbies/{lobby_id}
+  - [handlers.GetLobbyInternalHandler()](backend/services/LobbyService/internal/handlers/get_lobby_internal.go:18) – GET /internal/lobbies/{lobby_id}
   - [handlers.KickPlayerHandler()](backend/services/LobbyService/internal/handlers/kick_player.go:22) – POST /lobbies/{lobby_id}/kick
   - [handlers.UpdatePlayerActiveStatusHandler()](backend/services/LobbyService/internal/handlers/update_player_active_status.go:21) – PUT /internal/lobbies/{lobby_id}/players/{player_id}/active
 - Validierung: Header- und UUID-Formatprüfungen in Handlern; Join-Code-Länge exakt 6 (A–Z, 0–9).
@@ -45,6 +46,9 @@ Basis-URL: http://localhost:8083
   - Interner Endpunkt (keine Auth-Middleware auf Router-Ebene)
   - Body: { "is_active": true|false }
   - 204; 400, 404, 500
+- GET /internal/lobbies/{lobby_id}
+  - Interner Endpunkt (keine Auth-Middleware auf Router-Ebene)
+  - 200: LobbyDetailResponse; 400, 404, 500
 
 Hinweise:
 - Keine Pagination-, Filter- oder Sortier-Parameter vorhanden.
@@ -156,6 +160,11 @@ Update Player Active (internal):
 curl -sS -X PUT "http://localhost:8083/internal/lobbies/123e4567-e89b-12d3-a456-426614174000/players/789e4567-e89b-12d3-a456-426614174111/active" \
   -H "Content-Type: application/json" \
   -d '{"is_active":false}' -i
+```
+
+Get Lobby Internal:
+```bash
+curl -sS "http://localhost:8083/internal/lobbies/123e4567-e89b-12d3-a456-426614174000" -i
 ```
 
 ## Bekannte Stolpersteine & Troubleshooting
