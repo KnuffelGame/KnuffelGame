@@ -31,8 +31,8 @@ func NewTestConfig() *models.Config {
 		JWTCookieName: "jwt",
 		InternalToken: "test-internal",
 
-		HeartbeatInterval: 100 * time.Millisecond,
-		APIGatewayBaseURL: "",
+		HeartbeatInterval:  100 * time.Millisecond,
+		AuthServiceBaseURL: "",
 	}
 }
 
@@ -56,7 +56,7 @@ func NewTestRouter(cfg *models.Config, log *slog.Logger, mockAPIGatewayBaseURL s
 		log = NewTestLogger()
 	}
 	if mockAPIGatewayBaseURL != "" {
-		cfg.APIGatewayBaseURL = mockAPIGatewayBaseURL
+		cfg.AuthServiceBaseURL = mockAPIGatewayBaseURL
 	}
 	return router.New(cfg, log)
 }

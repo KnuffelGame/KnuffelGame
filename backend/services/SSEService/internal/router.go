@@ -37,41 +37,20 @@ func New(cfg *models.Config, log *slog.Logger) http.Handler {
 	// Registry singleton for handlers
 	reg := models.NewRegistry()
 
-	// Public SSE endpoints with optional rate limiting
-	sseLimiter := ssemw.RateLimitSSE(cfg)
+	// Public SSE endpoints - rate limits disabled in MVP
 	r.Route("/events", func(r chi.Router) {
-		if sseLimiter != nil {
-			r = r.With(sseLimiter)
-		}
 		// Authenticated SSE endpoints with membership authorization
 		r.Group(func(r chi.Router) {
 			r.Use(ssemw.AuthMiddleware(cfg, log))
 			r.Use(ssemw.AuthorizeLobbyMembership(cfg, log))
 			r.Get("/lobby/{lobby_id}", handlers.SubscribeLobbyEvents(reg, cfg, log))
 		})
-		r.Group(func(r chi.Router) {
-			r.Use(ssemw.AuthMiddleware(cfg, log))
-			r.Use(ssemw.AuthorizeGameMembership(cfg, log))
-			r.Get("/game/{game_id}", handlers.SubscribeGameEvents(reg, cfg, log))
-		})
 	})
 
-	// Internal endpoints, protected by internal-only token and rate limited
-	internalGuard := ssemw.InternalOnly(cfg)
-	internalLimiter := ssemw.RateLimitInternal(cfg)
+	// Internal endpoints - no token check per spec (isolated by reverse proxy)
 	r.Route("/internal", func(r chi.Router) {
-		if internalGuard != nil {
-			r.Use(internalGuard)
-		}
-		if internalLimiter != nil {
-			r.Use(internalLimiter)
-		}
-
 		// Internal endpoints using the registry
 		r.Post("/publish", handlers.Publish(reg, log))
-		r.Post("/register", handlers.RegisterTarget(reg))
-		r.Post("/unregister", handlers.UnregisterTarget(reg, log))
-		r.Get("/connections", handlers.GetConnectionStats(reg))
 	})
 
 	return r

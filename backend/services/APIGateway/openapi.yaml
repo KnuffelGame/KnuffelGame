@@ -1,192 +1,102 @@
 openapi: 3.0.3
 info:
-  title: Knuffel API Gateway
+  title: Knuffel API Gateway API
   description: |
-    Central API Gateway for the Knuffel multiplayer Kniffel application.
-    
-    **Responsibilities:**
-    - Routing of client requests to backend services
-    - Central JWT validation (via Auth Service)
-    - Request forwarding with user context
-    - CORS handling
-    - Rate limiting (optional)
-    
-    **Technical Details:**
+    API Gateway service for the Knuffel multiplayer Kniffel application.
+
+    Responsibilities:
+    - Proxy requests to LobbyService and GameService
+    - Validate JWT tokens from cookies
+    - Add X-User-ID and X-Username headers for proxied requests
+    - Handle guest token creation for lobby creation and joining
+
+    Technical Details:
     - Language: Go
-    - Storage: Stateless (no database)
-    - Authentication: JWT validation via Auth Service
-    - Routing: Path-based routing to internal services
-    
-    **Architecture:**
-    ```
-    Client → API Gateway → JWT Validation (Auth Service)
-                ↓
-          Add Headers (X-User-ID, X-Username)
-                ↓
-          Route to Backend Service (Lobby/Game)
-                ↓
-          Return Response to Client
-    ```
-    
-    **Request Flow:**
-    1. Client sends request with JWT cookie
-    2. Gateway extracts JWT from cookie
-    3. Gateway validates JWT via Auth Service (POST /internal/validate)
-    4. Auth Service returns user context (user_id, username)
-    5. Gateway adds headers: X-User-ID, X-Username
-    6. Gateway forwards request to appropriate backend service
-    7. Backend service processes request
-    8. Gateway returns response to client
-    
-    **CORS Policy:**
-    - Allowed Origins: https://knuffel.uni.de (configurable)
-    - Allowed Methods: GET, POST, PUT, DELETE, OPTIONS
-    - Allowed Headers: Content-Type, Cookie
-    - Credentials: true (for cookie-based auth)
-    
-    **Rate Limiting (Optional):**
-    - 10 requests per second per user
-    - Applied after JWT validation
+    - Authentication: JWT in cookies
+    - Proxies: LobbyService (/lobbies/*), GameService (/games/*)
   version: 1.0.0
   contact:
     name: Knuffel Team
 
 servers:
-  - url: http://localhost:8080
-    description: APIGateway (port from docker-compose.yaml)
+  - url: http://{host}:{port}{basePath}
+    description: Local
+    variables:
+      host:
+        default: localhost
+      port:
+        default: "8080"
+      basePath:
+        default: ""
+  - url: https://{host}{basePath}
+    description: Staging
+    variables:
+      host:
+        default: api-staging.example.com
+      basePath:
+        default: ""
+  - url: https://{host}{basePath}
+    description: Production
+    variables:
+      host:
+        default: api.knuffelgame.example.com
+      basePath:
+        default: ""
 
 tags:
-  - name: Authentication
-    description: Authentication endpoints
   - name: Lobbies
-    description: Lobby management (proxied to Lobby Service)
+    description: Lobby lifecycle and access (proxied to LobbyService)
   - name: Games
-    description: Game actions (proxied to Game Service)
+    description: Game actions and state (proxied to GameService)
+  - name: Health
+    description: Service health
+
+security:
+  - JWTCookie: []
 
 paths:
-  /auth/guest:
+  /lobbies:
     post:
-      tags:
-        - Authentication
-      summary: Create guest account and get JWT
+      tags: [Lobbies]
+      summary: Create a new lobby
       description: |
-        Creates a new guest user account and returns a JWT token.
-        
-        **Flow:**
-        1. Gateway generates unique user_id
-        2. Gateway calls Auth Service to create JWT
-        3. Gateway sets JWT as HTTP-Only cookie
-        4. Gateway returns user info
-        
-        **Cookie attributes:**
-        - HTTP-Only: true (prevents JavaScript access)
-        - Secure: true (HTTPS only in production)
-        - SameSite: Strict (CSRF protection)
-        - Max-Age: 86400 (24 hours)
-        - Path: /
-      operationId: createGuestAccount
+        Creates a new lobby with the requesting user as leader; generates a unique join code; creates the user idempotently if not existing; adds the user as the first active player; returns lobby detail.
+
+        Authentication: JWT cookie required. For guest users, token is created automatically during this request.
+      operationId: createLobby
+      security:
+        - JWTCookie: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateGuestRequest'
+              $ref: '#/components/schemas/CreateLobbyRequest'
             examples:
-              newGuest:
-                summary: Create guest user
+              create:
+                summary: Create lobby
                 value:
                   username: "Alice"
       responses:
-        '200':
-          description: Guest account created successfully
-          headers:
-            Set-Cookie:
-              description: JWT authentication cookie
-              schema:
-                type: string
-                example: "jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...; HttpOnly; Secure; SameSite=Strict; Max-Age=86400; Path=/"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/GuestAccountResponse'
-              examples:
-                success:
-                  summary: Guest account created
-                  value:
-                    user_id: "usr_abc123def456"
-                    username: "Alice"
-                    is_guest: true
-                    expires_at: "2025-10-25T10:30:00Z"
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-  /lobbies:
-    post:
-      tags:
-        - Lobbies
-      summary: Create new lobby
-      description: |
-        Creates a new lobby with the authenticated user as leader.
-        
-        **Proxied to:** Lobby Service POST /lobbies
-      operationId: createLobby
-      security:
-        - JWTCookie: []
-      responses:
         '201':
-          description: Lobby created successfully
+          description: Lobby created
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LobbyDetailResponse'
+                $ref: '#/components/schemas/CreateLobbyResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-  /lobbies/{lobby_id}:
-    get:
-      tags:
-        - Lobbies
-      summary: Get lobby details
-      description: |
-        Returns current lobby state.
-        
-        **Proxied to:** Lobby Service GET /lobbies/{lobby_id}
-      operationId: getLobby
-      security:
-        - JWTCookie: []
-      parameters:
-        - $ref: '#/components/parameters/LobbyIdPath'
-      responses:
-        '200':
-          description: Lobby details retrieved
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/LobbyDetailResponse'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/LobbyNotFound'
         '500':
           $ref: '#/components/responses/InternalServerError'
 
   /lobbies/join:
     post:
-      tags:
-        - Lobbies
-      summary: Join lobby by join code
+      tags: [Lobbies]
+      summary: Join a lobby by join code
       description: |
-        Joins an existing lobby using join code.
-        
-        **Proxied to:** Lobby Service POST /lobbies/join
+        Join an existing lobby using a join code; validates lobby status, enforces max players; returns updated lobby detail.
+
+        Authentication: JWT cookie required. For guest users, token is created automatically during this request.
       operationId: joinLobby
       security:
         - JWTCookie: []
@@ -198,7 +108,33 @@ paths:
               $ref: '#/components/schemas/JoinLobbyRequest'
       responses:
         '200':
-          description: Successfully joined lobby
+          description: Joined lobby successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LobbyDetailResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /lobbies/{lobby_id}:
+    get:
+      tags: [Lobbies]
+      summary: Get lobby details
+      description: Retrieve full lobby details including players and leader.
+      operationId: getLobby
+      security:
+        - JWTCookie: []
+      parameters:
+        - $ref: '#/components/parameters/LobbyIdParam'
+      responses:
+        '200':
+          description: Lobby details
           content:
             application/json:
               schema:
@@ -207,35 +143,23 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
-          description: Lobby not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '409':
-          description: Cannot join lobby
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+          $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalServerError'
 
   /lobbies/{lobby_id}/kick:
     post:
-      tags:
-        - Lobbies
-      summary: Kick player from lobby
-      description: |
-        Removes a player from the lobby. Only available to lobby leader.
-        
-        **Proxied to:** Lobby Service POST /lobbies/{lobby_id}/kick
+      tags: [Lobbies]
+      summary: Kick a player from a lobby (leader only)
+      description: Remove a player from a lobby by target_user_id; only the lobby leader may perform this action.
       operationId: kickPlayer
       security:
         - JWTCookie: []
       parameters:
-        - $ref: '#/components/parameters/LobbyIdPath'
+        - $ref: '#/components/parameters/LobbyIdParam'
       requestBody:
         required: true
         content:
@@ -243,120 +167,22 @@ paths:
             schema:
               $ref: '#/components/schemas/KickPlayerRequest'
       responses:
-        '200':
-          description: Player kicked successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SuccessResponse'
+        '204':
+          description: Player kicked
         '400':
           $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Not authorized
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+          $ref: '#/components/responses/Forbidden'
         '404':
-          description: Lobby or player not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-  /lobbies/{lobby_id}/start:
-    post:
-      tags:
-        - Lobbies
-      summary: Start game
-      description: |
-        Starts the game for this lobby. Only available to lobby leader.
-        
-        **Proxied to:** Lobby Service POST /lobbies/{lobby_id}/start
-      operationId: startGame
-      security:
-        - JWTCookie: []
-      parameters:
-        - $ref: '#/components/parameters/LobbyIdPath'
-      responses:
-        '200':
-          description: Game started successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StartGameResponse'
-        '400':
-          description: Cannot start game
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          description: Not authorized
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
-          $ref: '#/components/responses/LobbyNotFound'
-        '409':
-          description: Game already started
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-  /lobbies/{lobby_id}/leave:
-    post:
-      tags:
-        - Lobbies
-      summary: Leave lobby
-      description: |
-        Removes the authenticated user from the lobby.
-        
-        **Proxied to:** Lobby Service POST /lobbies/{lobby_id}/leave
-      operationId: leaveLobby
-      security:
-        - JWTCookie: []
-      parameters:
-        - $ref: '#/components/parameters/LobbyIdPath'
-      responses:
-        '200':
-          description: Successfully left lobby
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SuccessResponse'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          description: Lobby not found or user not in lobby
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+          $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalServerError'
 
   /games/{game_id}:
     get:
-      tags:
-        - Games
+      tags: [Games]
       summary: Get game state
-      description: |
-        Returns complete game state.
-        
-        **Proxied to:** Game Service GET /games/{game_id}
+      description: Returns complete game state including current player, dice, and score board.
       operationId: getGameState
       security:
         - JWTCookie: []
@@ -364,7 +190,7 @@ paths:
         - $ref: '#/components/parameters/GameIdPath'
       responses:
         '200':
-          description: Game state retrieved
+          description: Game state retrieved successfully
           content:
             application/json:
               schema:
@@ -386,13 +212,9 @@ paths:
 
   /games/{game_id}/roll:
     post:
-      tags:
-        - Games
+      tags: [Games]
       summary: Roll dice
-      description: |
-        Rolls all unlocked dice.
-        
-        **Proxied to:** Game Service POST /games/{game_id}/roll
+      description: Rolls all unlocked dice. Can be called up to 3 times per turn.
       operationId: rollDice
       security:
         - JWTCookie: []
@@ -422,13 +244,9 @@ paths:
 
   /games/{game_id}/toggle-dice:
     post:
-      tags:
-        - Games
+      tags: [Games]
       summary: Toggle dice lock/unlock
-      description: |
-        Locks or unlocks specific dice.
-        
-        **Proxied to:** Game Service POST /games/{game_id}/toggle-dice
+      description: Locks or unlocks specific dice. Locked dice keep their value on next roll.
       operationId: toggleDice
       security:
         - JWTCookie: []
@@ -468,13 +286,9 @@ paths:
 
   /games/{game_id}/select-field:
     post:
-      tags:
-        - Games
+      tags: [Games]
       summary: Select field and end turn
-      description: |
-        Selects a field on the scorecard and ends the turn.
-        
-        **Proxied to:** Game Service POST /games/{game_id}/select-field
+      description: Selects a field on the scorecard, calculates points, and ends the turn.
       operationId: selectField
       security:
         - JWTCookie: []
@@ -514,13 +328,9 @@ paths:
 
   /games/{game_id}/end:
     post:
-      tags:
-        - Games
+      tags: [Games]
       summary: End game prematurely
-      description: |
-        Ends the game before completion. Only available to lobby leader.
-        
-        **Proxied to:** Game Service POST /games/{game_id}/end
+      description: Ends the game before all fields are filled. Only available to lobby leader.
       operationId: endGame
       security:
         - JWTCookie: []
@@ -538,7 +348,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Not authorized
+          description: Not authorized to end game
           content:
             application/json:
               schema:
@@ -554,18 +364,37 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
+  /healthcheck:
+    get:
+      tags: [Health]
+      summary: Health check endpoint
+      description: Returns service health status
+      operationId: healthcheck
+      security: []  # No auth required
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
 components:
+  securitySchemes:
+    JWTCookie:
+      type: apiKey
+      in: cookie
+      name: jwt
+      description: JWT token stored in httpOnly cookie for authentication
+
   parameters:
-    LobbyIdPath:
+    LobbyIdParam:
       name: lobby_id
       in: path
       required: true
-      description: Unique lobby identifier
       schema:
         type: string
-        pattern: '^lby_[a-zA-Z0-9]+$'
-        example: "lby_abc123"
-
+        format: uuid
     GameIdPath:
       name: game_id
       in: path
@@ -574,84 +403,436 @@ components:
       schema:
         type: string
         pattern: '^gam_[a-zA-Z0-9]+$'
-        example: "gam_xyz789"
 
   schemas:
-    CreateGuestRequest:
+    # Lobby schemas
+    PlayerInfo:
+      type: object
+      required: [id, user_id, username, joined_at, is_active]
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        username:
+          type: string
+          maxLength: 20
+        joined_at:
+          type: string
+          format: date-time
+        is_active:
+          type: boolean
+    LobbyDetailResponse:
+      type: object
+      required: [lobby_id, join_code, status, leader_id, players]
+      properties:
+        lobby_id:
+          type: string
+          format: uuid
+        join_code:
+          type: string
+          minLength: 6
+          maxLength: 6
+          description: 6-character uppercase alphanumeric code
+          example: "ABC123"
+        status:
+          type: string
+          enum: [waiting, running, finished]
+        leader_id:
+          type: string
+          format: uuid
+        players:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlayerInfo'
+    CreateLobbyResponse:
+      allOf:
+        - $ref: '#/components/schemas/LobbyDetailResponse'
+    CreateLobbyRequest:
       type: object
       required:
         - username
       properties:
         username:
           type: string
-          description: Display name for guest user
+          description: Display name for the user (letters, digits, spaces)
           minLength: 3
           maxLength: 20
+          pattern: '^[A-Za-z0-9 ]+$'
           example: "Alice"
+    JoinLobbyRequest:
+      type: object
+      required: [join_code, username]
+      properties:
+        join_code:
+          type: string
+          minLength: 6
+          maxLength: 6
+          example: "ABC123"
+        username:
+          type: string
+          description: Display name for the user (letters, digits, spaces)
+          minLength: 3
+          maxLength: 20
+          pattern: '^[A-Za-z0-9 ]+$'
+          example: "Alice"
+    KickPlayerRequest:
+      type: object
+      required: [target_user_id]
+      properties:
+        target_user_id:
+          type: string
+          format: uuid
 
-    GuestAccountResponse:
+    # Game schemas
+    CreateGameRequest:
+      type: object
+      required:
+        - lobby_id
+        - turn_order
+      properties:
+        lobby_id:
+          type: string
+          description: Associated lobby identifier
+          example: "lby_abc123"
+        turn_order:
+          type: array
+          description: Ordered list of players
+          items:
+            $ref: '#/components/schemas/PlayerInfo'
+          minItems: 2
+          maxItems: 6
+    PlayerInfoGame:
       type: object
       required:
         - user_id
         - username
-        - is_guest
-        - expires_at
       properties:
         user_id:
           type: string
-          description: Generated user identifier
-          example: "usr_abc123def456"
+          description: User identifier
+          example: "usr_alice123"
         username:
           type: string
           description: Display name
           example: "Alice"
-        is_guest:
-          type: boolean
-          enum: [true]
-          description: Always true for guest accounts
-        expires_at:
-          type: string
-          format: date-time
-          description: JWT expiration timestamp (24h from now)
-          example: "2025-10-25T10:30:00Z"
-
-    LobbyDetailResponse:
-      type: object
-      description: Full lobby details (schema defined in Lobby Service)
-
-    JoinLobbyRequest:
+    CreateGameResponse:
       type: object
       required:
-        - join_code
+        - game_id
+        - lobby_id
+        - current_player_id
+        - turn_order
       properties:
-        join_code:
+        game_id:
           type: string
-          description: 6-character join code
-          pattern: '^[A-Za-z0-9]{6}$'
-          example: "ABC123"
-
-    KickPlayerRequest:
-      type: object
-      required:
-        - target_user_id
-      properties:
-        target_user_id:
+          description: Created game identifier
+          example: "gam_xyz789"
+        lobby_id:
           type: string
-          description: User ID of player to kick
-          example: "usr_bob456"
-
-    StartGameResponse:
-      type: object
-      description: Game start response (schema defined in Lobby Service)
-
+          description: Associated lobby identifier
+          example: "lby_abc123"
+        current_player_id:
+          type: string
+          description: First player's user ID
+          example: "usr_charlie789"
+        turn_order:
+          type: array
+          description: Player turn order (user IDs)
+          items:
+            type: string
+          example: ["usr_charlie789", "usr_alice123", "usr_bob456"]
     GameStateResponse:
       type: object
-      description: Full game state (schema defined in Game Service)
-
+      required:
+        - game_id
+        - lobby_id
+        - status
+        - current_player_id
+        - current_player_username
+        - roll_count
+        - dice
+        - timeout_remaining_seconds
+        - turn_order
+        - score_board
+        - started_at
+      properties:
+        game_id:
+          type: string
+          description: Game identifier
+          example: "gam_xyz789"
+        lobby_id:
+          type: string
+          description: Associated lobby identifier
+          example: "lby_abc123"
+        status:
+          type: string
+          enum:
+            - running
+            - finished
+          description: Current game status
+          example: "running"
+        current_player_id:
+          type: string
+          description: User ID of current player
+          example: "usr_alice123"
+        current_player_username:
+          type: string
+          description: Username of current player
+          example: "Alice"
+        roll_count:
+          type: integer
+          description: Number of rolls in current turn (0-3)
+          minimum: 0
+          maximum: 3
+          example: 1
+        dice:
+          type: array
+          description: Current dice state (5 dice)
+          items:
+            $ref: '#/components/schemas/Die'
+          minItems: 5
+          maxItems: 5
+        timeout_remaining_seconds:
+          type: integer
+          description: Seconds remaining before auto-skip (40s max)
+          minimum: 0
+          maximum: 40
+          example: 35
+        turn_order:
+          type: array
+          description: Player turn order (user IDs)
+          items:
+            type: string
+          example: ["usr_charlie789", "usr_alice123", "usr_bob456"]
+        score_board:
+          type: array
+          description: Score board for all players
+          items:
+            $ref: '#/components/schemas/PlayerScores'
+        started_at:
+          type: string
+          format: date-time
+          description: Game start timestamp
+          example: "2025-10-24T10:35:00Z"
+        finished_at:
+          type: string
+          format: date-time
+          description: Game end timestamp (only if status is "finished")
+          example: "2025-10-24T11:05:00Z"
+    Die:
+      type: object
+      required:
+        - value
+        - locked
+      properties:
+        value:
+          type: integer
+          description: Die value (1-6), null if not rolled yet
+          minimum: 1
+          maximum: 6
+          nullable: true
+          example: 3
+        locked:
+          type: boolean
+          description: Whether die is locked for next roll
+          example: false
+    PlayerScores:
+      type: object
+      required:
+        - user_id
+        - username
+        - scores
+      properties:
+        user_id:
+          type: string
+          description: User identifier
+          example: "usr_alice123"
+        username:
+          type: string
+          description: Display name
+          example: "Alice"
+        status:
+          type: string
+          enum:
+            - active
+            - inactive
+            - left
+          description: Player status
+          example: "active"
+        scores:
+          $ref: '#/components/schemas/ScoreCard'
+    ScoreCard:
+      type: object
+      required:
+        - ones
+        - twos
+        - threes
+        - fours
+        - fives
+        - sixes
+        - upper_sum
+        - bonus
+        - three_of_a_kind
+        - four_of_a_kind
+        - full_house
+        - small_straight
+        - large_straight
+        - kniffel
+        - chance
+        - lower_sum
+        - total
+      properties:
+        ones:
+          type: integer
+          nullable: true
+          description: Sum of all 1s
+          minimum: 0
+          maximum: 5
+          example: 3
+        twos:
+          type: integer
+          nullable: true
+          description: Sum of all 2s
+          minimum: 0
+          maximum: 10
+          example: null
+        threes:
+          type: integer
+          nullable: true
+          description: Sum of all 3s
+          minimum: 0
+          maximum: 15
+          example: null
+        fours:
+          type: integer
+          nullable: true
+          description: Sum of all 4s
+          minimum: 0
+          maximum: 20
+          example: null
+        fives:
+          type: integer
+          nullable: true
+          description: Sum of all 5s
+          minimum: 0
+          maximum: 25
+          example: null
+        sixes:
+          type: integer
+          nullable: true
+          description: Sum of all 6s
+          minimum: 0
+          maximum: 30
+          example: null
+        upper_sum:
+          type: integer
+          description: Sum of upper section (calculated)
+          minimum: 0
+          example: 3
+        bonus:
+          type: integer
+          nullable: true
+          description: Bonus points if upper_sum ≥ 63 (+35)
+          enum: [0, 35]
+          example: null
+        three_of_a_kind:
+          type: integer
+          nullable: true
+          description: Sum of all dice if at least 3 match
+          minimum: 0
+          maximum: 30
+          example: null
+        four_of_a_kind:
+          type: integer
+          nullable: true
+          description: Sum of all dice if at least 4 match
+          minimum: 0
+          maximum: 30
+          example: null
+        full_house:
+          type: integer
+          nullable: true
+          description: 25 points for 3-of-a-kind + pair
+          enum: [0, 25]
+          example: null
+        small_straight:
+          type: integer
+          nullable: true
+          description: 30 points for 4 consecutive dice
+          enum: [0, 30]
+          example: null
+        large_straight:
+          type: integer
+          nullable: true
+          description: 40 points for 5 consecutive dice
+          enum: [0, 40]
+          example: null
+        kniffel:
+          type: integer
+          nullable: true
+          description: 50 points for all 5 dice matching
+          enum: [0, 50]
+          example: null
+        chance:
+          type: integer
+          nullable: true
+          description: Sum of all dice (no restrictions)
+          minimum: 0
+          maximum: 30
+          example: null
+        lower_sum:
+          type: integer
+          description: Sum of lower section (calculated)
+          minimum: 0
+          example: 0
+        total:
+          type: integer
+          description: Total score (upper + bonus + lower)
+          minimum: 0
+          example: 3
+        kniffel_bonus_count:
+          type: integer
+          description: Number of additional Kniffels after first (×50 points each)
+          minimum: 0
+          default: 0
+          example: 0
     RollDiceResponse:
       type: object
-      description: Roll dice response (schema defined in Game Service)
-
+      required:
+        - game_id
+        - roll_count
+        - dice
+        - can_roll_again
+        - must_select_field
+      properties:
+        game_id:
+          type: string
+          description: Game identifier
+          example: "gam_xyz789"
+        roll_count:
+          type: integer
+          description: Current roll count (1-3)
+          minimum: 1
+          maximum: 3
+          example: 1
+        dice:
+          type: array
+          description: Current dice state
+          items:
+            $ref: '#/components/schemas/Die'
+          minItems: 5
+          maxItems: 5
+        can_roll_again:
+          type: boolean
+          description: Whether player can roll again
+          example: true
+        must_select_field:
+          type: boolean
+          description: Whether player must now select a field
+          example: false
     ToggleDiceRequest:
       type: object
       required:
@@ -659,16 +840,32 @@ components:
       properties:
         dice_indices:
           type: array
+          description: Indices of dice to toggle (0-4)
           items:
             type: integer
             minimum: 0
             maximum: 4
+          minItems: 1
+          maxItems: 5
+          uniqueItems: true
           example: [1, 4]
-
     ToggleDiceResponse:
       type: object
-      description: Toggle dice response (schema defined in Game Service)
-
+      required:
+        - game_id
+        - dice
+      properties:
+        game_id:
+          type: string
+          description: Game identifier
+          example: "gam_xyz789"
+        dice:
+          type: array
+          description: Updated dice state
+          items:
+            $ref: '#/components/schemas/Die'
+          minItems: 5
+          maxItems: 5
     SelectFieldRequest:
       type: object
       required:
@@ -676,6 +873,7 @@ components:
       properties:
         field:
           type: string
+          description: Field name to select
           enum:
             - ones
             - twos
@@ -691,28 +889,139 @@ components:
             - kniffel
             - chance
           example: "threes"
-
     SelectFieldResponse:
       type: object
-      description: Select field response (schema defined in Game Service)
-
-    EndGameResponse:
-      type: object
-      description: End game response (schema defined in Game Service)
-
-    SuccessResponse:
+      required:
+        - game_id
+        - field
+        - points_earned
+        - new_total
+        - game_finished
+      properties:
+        game_id:
+          type: string
+          description: Game identifier
+          example: "gam_xyz789"
+        field:
+          type: string
+          description: Selected field name
+          example: "threes"
+        points_earned:
+          type: integer
+          description: Points earned for this field
+          minimum: 0
+          example: 9
+        bonus_applied:
+          type: object
+          nullable: true
+          description: Bonus information if applicable
+          properties:
+            type:
+              type: string
+              enum:
+                - upper_section_bonus
+                - multiple_kniffel
+              description: Type of bonus
+              example: "multiple_kniffel"
+            points:
+              type: integer
+              description: Bonus points
+              example: 50
+        new_total:
+          type: integer
+          description: Player's new total score
+          minimum: 0
+          example: 12
+        next_player_id:
+          type: string
+          nullable: true
+          description: Next player's user ID (null if game finished)
+          example: "usr_bob456"
+        next_player_username:
+          type: string
+          nullable: true
+          description: Next player's username (null if game finished)
+          example: "Bob"
+        game_finished:
+          type: boolean
+          description: Whether game is now finished
+          example: false
+        final_rankings:
+          type: array
+          nullable: true
+          description: Final rankings (only if game_finished is true)
+          items:
+            $ref: '#/components/schemas/PlayerRanking'
+    PlayerRanking:
       type: object
       required:
-        - success
-        - message
+        - user_id
+        - username
+        - total_score
+        - rank
       properties:
-        success:
-          type: boolean
-          enum: [true]
-        message:
+        user_id:
           type: string
-          example: "Operation completed successfully"
+          description: User identifier
+          example: "usr_alice123"
+        username:
+          type: string
+          description: Display name
+          example: "Alice"
+        total_score:
+          type: integer
+          description: Final total score
+          minimum: 0
+          example: 234
+        rank:
+          type: integer
+          description: Final rank (1 = winner)
+          minimum: 1
+          example: 1
+    EndGameResponse:
+      type: object
+      required:
+        - game_id
+        - status
+        - ended_prematurely
+        - final_rankings
+        - ended_at
+      properties:
+        game_id:
+          type: string
+          description: Game identifier
+          example: "gam_xyz789"
+        status:
+          type: string
+          enum: [finished]
+          description: Game status
+          example: "finished"
+        ended_prematurely:
+          type: boolean
+          description: Whether game was ended before completion
+          example: true
+        final_rankings:
+          type: array
+          description: Final rankings with current scores
+          items:
+            $ref: '#/components/schemas/PlayerRanking'
+        ended_at:
+          type: string
+          format: date-time
+          description: Game end timestamp
+          example: "2025-10-24T10:45:00Z"
 
+    # Common schemas
+    HealthResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: ["ok"]
+          description: Service health status
+          example: "ok"
     ErrorResponse:
       type: object
       required:
@@ -722,103 +1031,56 @@ components:
         error:
           type: string
           description: Error code
-          example: "lobby_not_found"
+          example: "invalid_request"
         message:
           type: string
           description: Human-readable error message
-          example: "Lobby not found"
+          example: "Validation failed"
         details:
           type: object
-          description: Additional error details
           additionalProperties: true
+          description: Additional error details
 
   responses:
     BadRequest:
-      description: Invalid request parameters
+      description: Invalid request
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
-          examples:
-            missingField:
-              summary: Missing required field
-              value:
-                error: "invalid_request"
-                message: "Missing required field: username"
-            invalidUsername:
-              summary: Invalid username length
-              value:
-                error: "invalid_request"
-                message: "Username must be between 3 and 20 characters"
-
     Unauthorized:
       description: Missing or invalid authentication
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
-          examples:
-            missingToken:
-              summary: No JWT cookie
-              value:
-                error: "unauthorized"
-                message: "Authentication required"
-            invalidToken:
-              summary: Invalid or expired JWT
-              value:
-                error: "unauthorized"
-                message: "Invalid or expired authentication token"
-
-    LobbyNotFound:
-      description: Lobby not found
+    Forbidden:
+      description: Not allowed to perform this action
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
-          examples:
-            notFound:
-              summary: Lobby does not exist
-              value:
-                error: "lobby_not_found"
-                message: "Lobby not found"
-
-    GameNotFound:
-      description: Game not found
+    NotFound:
+      description: Resource not found
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
-          examples:
-            notFound:
-              summary: Game does not exist
-              value:
-                error: "game_not_found"
-                message: "Game not found"
-
+    Conflict:
+      description: Conflict with current resource state
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
     InternalServerError:
       description: Internal server error
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
-          examples:
-            generic:
-              summary: Generic server error
-              value:
-                error: "internal_error"
-                message: "An unexpected error occurred"
-            serviceUnavailable:
-              summary: Backend service unavailable
-              value:
-                error: "service_unavailable"
-                message: "Backend service temporarily unavailable"
-
-  securitySchemes:
-    JWTCookie:
-      type: apiKey
-      in: cookie
-      name: jwt
-      description: JWT authentication token (HTTP-Only cookie)
-
-security:
-  - JWTCookie: []
+    GameNotFound:
+      description: Game not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

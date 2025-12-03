@@ -43,7 +43,7 @@ func TestAuthorizeLobbyMembership_Member_OK(t *testing.T) {
 	defer gw.Close()
 
 	cfg := testutil.NewTestConfig()
-	cfg.APIGatewayBaseURL = gw.URL
+	cfg.LobbyServiceBaseURL = gw.URL
 	log := testutil.NewTestLogger()
 	mw := middleware.AuthorizeLobbyMembership(cfg, log)
 
@@ -87,7 +87,7 @@ func TestAuthorizeLobbyMembership_NotMember_403(t *testing.T) {
 	defer gw.Close()
 
 	cfg := testutil.NewTestConfig()
-	cfg.APIGatewayBaseURL = gw.URL
+	cfg.LobbyServiceBaseURL = gw.URL
 	log := testutil.NewTestLogger()
 	mw := middleware.AuthorizeLobbyMembership(cfg, log)
 
@@ -126,7 +126,7 @@ func TestAuthorizeLobbyMembership_NotFound_404(t *testing.T) {
 	defer gw.Close()
 
 	cfg := testutil.NewTestConfig()
-	cfg.APIGatewayBaseURL = gw.URL
+	cfg.LobbyServiceBaseURL = gw.URL
 	log := testutil.NewTestLogger()
 	mw := middleware.AuthorizeLobbyMembership(cfg, log)
 
@@ -156,130 +156,10 @@ func TestAuthorizeLobbyMembership_NotFound_404(t *testing.T) {
 	}
 }
 
-func TestAuthorizeGameMembership_Member_OK(t *testing.T) {
-	// Mock APIGateway /games/{id} returning 200
-	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/games/") {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"ok":true}`))
-	}))
-	defer gw.Close()
-
+func TestAuthorizeLobbyMembership_LobbyServiceBaseURLMissing_500(t *testing.T) {
+	// When LobbyServiceBaseURL is missing, middleware must return 500 InternalServerError.
 	cfg := testutil.NewTestConfig()
-	cfg.APIGatewayBaseURL = gw.URL
-	log := testutil.NewTestLogger()
-	mw := middleware.AuthorizeGameMembership(cfg, log)
-
-	called := false
-	next := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/events/game/gam_xyz789", nil)
-	req = withChiParam(req, "game_id", "gam_xyz789")
-	req.Header.Set("X-User-ID", "usr_ok")
-	req.Header.Set("X-Username", "Alice")
-	req.AddCookie(&http.Cookie{Name: cfg.JWTCookieName, Value: "jwt-token"})
-	rec := httptest.NewRecorder()
-
-	next.ServeHTTP(rec, req)
-
-	if !called {
-		t.Fatalf("next handler was not called for authorized game membership")
-	}
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-}
-
-func TestAuthorizeGameMembership_Forbidden_403(t *testing.T) {
-	// Mock APIGateway returns 403
-	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusForbidden)
-		w.Write([]byte(`{"error":"forbidden","message":"not a player"}`))
-	}))
-	defer gw.Close()
-
-	cfg := testutil.NewTestConfig()
-	cfg.APIGatewayBaseURL = gw.URL
-	log := testutil.NewTestLogger()
-	mw := middleware.AuthorizeGameMembership(cfg, log)
-
-	next := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/events/game/gam_xyz789", nil)
-	req = withChiParam(req, "game_id", "gam_xyz789")
-	req.Header.Set("X-User-ID", "usr_nope")
-	req.Header.Set("X-Username", "Alice")
-	req.AddCookie(&http.Cookie{Name: cfg.JWTCookieName, Value: "jwt-token"})
-	rec := httptest.NewRecorder()
-
-	next.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", rec.Code)
-	}
-	var got respErr
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-	if got.Error != "forbidden" || got.Message != "You are not a player in this game" {
-		t.Fatalf("payload mismatch: %+v", got)
-	}
-}
-
-func TestAuthorizeGameMembership_NotFound_404(t *testing.T) {
-	// Mock APIGateway returns 404
-	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte(`{"error":"game_not_found","message":"Game not found"}`))
-	}))
-	defer gw.Close()
-
-	cfg := testutil.NewTestConfig()
-	cfg.APIGatewayBaseURL = gw.URL
-	log := testutil.NewTestLogger()
-	mw := middleware.AuthorizeGameMembership(cfg, log)
-
-	next := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/events/game/gam_xyz789", nil)
-	req = withChiParam(req, "game_id", "gam_xyz789")
-	req.Header.Set("X-User-ID", "usr_ok")
-	req.Header.Set("X-Username", "Alice")
-	req.AddCookie(&http.Cookie{Name: cfg.JWTCookieName, Value: "jwt-token"})
-	rec := httptest.NewRecorder()
-
-	next.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404", rec.Code)
-	}
-	var got respErr
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-	// Current implementation returns error "not_found"; assert message matches spec.
-	if got.Message != "Game not found" {
-		t.Fatalf("message mismatch: %+v", got)
-	}
-}
-
-func TestAuthorizeLobbyMembership_APIGatewayBaseURLMissing_500(t *testing.T) {
-	// When APIGatewayBaseURL is missing, middleware must return 500 InternalServerError.
-	cfg := testutil.NewTestConfig()
-	cfg.APIGatewayBaseURL = ""
+	cfg.LobbyServiceBaseURL = ""
 	log := testutil.NewTestLogger()
 	mw := middleware.AuthorizeLobbyMembership(cfg, log)
 

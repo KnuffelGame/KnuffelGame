@@ -185,6 +185,29 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
+  /internal/lobbies/{lobby_id}:
+    get:
+      tags: [Internal]
+      summary: Get lobby details (internal)
+      description: Internal endpoint used by services to retrieve lobby details; validates lobby existence; responds 200 on success, 404 if lobby not found, 400 for invalid ID, and 500 for database errors.
+      operationId: getLobbyInternal
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/LobbyIdParam'
+      responses:
+        '200':
+          description: Lobby details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LobbyDetailResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
   /healthcheck:
     get:
       tags: [Health]

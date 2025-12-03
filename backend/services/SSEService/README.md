@@ -1,6 +1,6 @@
 # SSE Service
 
-Implementation-ready architecture blueprint for the Server-Sent Events (SSE) service powering lobby and game updates in Knuffel.
+Implementation-ready architecture blueprint for the Server-Sent Events (SSE) service powering lobby updates in Knuffel.
 
 References:
 - OpenAPI: [openapi.yaml](backend/services/SSEService/openapi.yaml)
@@ -11,19 +11,20 @@ References:
 ## Overview and Responsibilities (aligned to OpenAPI)
 
 The SSEService is a stateless streaming layer providing:
-- SSE subscriptions for lobby and game audiences
-- Central broadcasting of events published by LobbyService and GameService
-- Connection lifecycle management and heartbeat keep-alives
-- Internal admin endpoints for registration/unregistration and connection stats
+- Single SSE subscription stream addressed strictly by lobby_id
+- Central broadcasting of events published by LobbyService and GameService via a single internal publish endpoint
+- Connection lifecycle management and per-connection heartbeat keep-alives
 - Healthcheck endpoint
+
+Semantics:
+- event_type is free-form, non-empty, up to 128 characters. Example types include: lobby_updated, game_updated. The event_type keep_alive is reserved by the SSEService and cannot be published by producers.
+- data is always a JSON object. The SSEService injects/overwrites data.timestamp on every event with a Unix epoch milliseconds number (field name "timestamp").
+
+Server URL: http://localhost:8084
 
 Endpoints per spec:
 - GET /events/lobby/{lobby_id}
-- GET /events/game/{game_id}
 - POST /internal/publish
-- POST /internal/register
-- POST /internal/unregister
-- GET /internal/connections
 - GET /healthcheck
 
 See OpenAPI details: [backend/services/SSEService/openapi.yaml](backend/services/SSEService/openapi.yaml).
@@ -35,23 +36,21 @@ See OpenAPI details: [backend/services/SSEService/openapi.yaml](backend/services
 - Stream naming:
   - Broadcast streams:
     - lobby:{lobby_id}
-    - game:{game_id}
-  - Targeted user scoping is supported in payload via `target_user_id` (clients should ignore events not addressed to them). For strict per-user isolation, a secondary subscription pattern using dedicated streams lobby:{lobby_id}:user:{user_id} and game:{game_id}:user:{user_id} is supported as an extension; clients may open a second EventSource to these streams when needed.
+- Addressing strictly via lobby_id. No per-user addressing and no game stream.
 
 ### Event formatting
 - SSE fields:
-  - event: <event_type> (string, per spec)
-  - data: <json> (serialized payload)
-- Types per spec:
-  - Lobby: player_joined, player_left, player_kicked, leader_changed, game_started, keep_alive
-  - Game: dice_rolled, dice_toggled, field_selected, turn_changed, player_inactive, player_active, game_ended, keep_alive
-- Payload: JSON object (additionalProperties allowed)
+  - event: <event_type> (string, free-form 1–128 chars; keep_alive is reserved by the service)
+  - data: <json> (serialized JSON object)
+- Example event_type values: lobby_updated, game_updated (free-form, not enforced). keep_alive is reserved and emitted by the service only.
+- Payload: JSON object. The SSEService injects/overwrites data.timestamp as a Unix epoch milliseconds number on each event (including keep_alive).
 
 ### Heartbeat keep-alive
-- Interval: configurable (default 30s)
-- Event: event=keep_alive, data={"timestamp":"<RFC3339>"}
-- Purpose: prevent intermediary idle timeouts and guide client-side reconnect.
-- Publisher: background goroutines per-target stream (started on register or first subscription, stopped on unregister).
+- Interval: configurable (default 30s), see HEARTBEAT_INTERVAL_MS.
+- Scope: per-connection (each active connection receives its own heartbeat).
+- Event: event=keep_alive, data={"timestamp": 1733220000000} (numeric epoch ms).
+- Purpose: prevent intermediary idle timeouts and provide a liveness signal.
+- No retry directive: the service does not emit an initial retry line (no retry: N directive).
 
 ### SSE response headers and handling
 - Required headers:
@@ -61,45 +60,36 @@ See OpenAPI details: [backend/services/SSEService/openapi.yaml](backend/services
 - Flush:
   - Use http.Flusher for immediate delivery. The r3labs server handles flushing internally; custom handlers must verify Flusher presence and use it.
 - Retry:
-  - Optionally set "retry: 5000" lines at stream start to tell clients a 5s reconnect interval. Heartbeats reduce unnecessary reconnects.
+  - The service does not emit an initial retry directive. Clients manage reconnection behavior.
 
 ## SSE Connection Registry
 
 ### Purpose
-An in-memory, concurrency-safe registry tracks per-target stream metadata, active connection counters, and lifecycle hooks. The data is used for pruning, stats, and emitting lifecycle logs.
+An in-memory, concurrency-safe registry tracks per-lobby stream metadata, approximate active connection counters, and metrics to aid observability.
 
 ### Keying strategy
-- Key: target composite string "lobby:{lobby_id}" or "game:{game_id}".
-- Optional per-user extension streams: append ":user:{user_id}" for targeted isolation (documented for future strict privacy requirements).
+- Key: target composite string "lobby:{lobby_id}".
 
 ### Data structures
-Typed maps with RWMutex:
+Typed maps with RWMutex (illustrative):
 - targets map[string]*TargetEntry
 - TargetEntry:
-  - Type: "lobby" | "game"
   - ID: string
   - StreamName: string
   - Connections: int (approximate active subscribers)
   - CreatedAt: time.Time
   - LastPublishAt: time.Time
-  - HeartbeatCancel: context.CancelFunc (to stop heartbeat goroutine)
   - Metrics: counters for events_sent, failed_connections (incremented on publish)
 
-### Concurrency approach and trade-offs
-- RWMutex over typed maps:
-  - Pros: predictable performance for frequent reads (publish, stats), clear ownership, minimizes allocations.
-  - Cons: manual lock discipline.
-- sync.Map alternative:
-  - Pros: simpler sharding-free concurrency, good for highly contested keys.
-  - Cons: reduced type safety, heavier allocations, more awkward stats iteration.
-- Decision: use sync.RWMutex with typed maps. Keys are stable; registry size remains small; iteration for stats is straightforward.
-
-### Lifecycle hooks
-- RegisterTarget: create TargetEntry and r3labs stream if absent; start heartbeat goroutine.
-- AddConnection: increment Connections and log.
+### Lifecycle semantics
+- Implicit registry:
+  - Entries are created implicitly on the first subscription to a lobby.
+  - Entries are removed automatically when the last connection ends.
+- AddConnection: increment counters and log on connect.
 - RemoveConnection: decrement on disconnect (via request context cancel).
 - Publish: send r3labs event to stream; increment metrics (events_sent, failed_connections if publish returns error).
-- UnregisterTarget: publish a final close event with reason, stop heartbeat, remove stream and registry entry; return connections_closed count.
+- No explicit lifecycle endpoints:
+  - There are no /internal/register, /internal/unregister, or /internal/connections endpoints in the MVP.
 
 ### Broken-connection pruning
 - Clients disconnect automatically; RemoveConnection updates counts using r.Context().Done().
@@ -109,43 +99,47 @@ Typed maps with RWMutex:
 
 ### Public SSE subscriptions
 - GET /events/lobby/{lobby_id}
-- GET /events/game/{game_id}
+
 Auth and authorization:
-- JWT cookie auth at gateway; SSEService consumes user context via headers:
-  - Requires X-User-ID and X-Username from APIGateway (libs/auth middleware).
-  - SSEService verifies membership via an authorizer calling APIGateway/Lobby/Game Service (see Authorizer middleware below).
+- JWT via cookie on the subscription endpoint (operation-level JWTCookie security in OpenAPI).
+- SSEService validates the JWT directly with AuthService via POST /internal/validate.
+- Membership is verified by calling LobbyService GET /internal/lobbies/{lobby_id} (no auth) to confirm lobby existence and that the user is a member.
+  - 404 if the lobby does not exist
+  - 403 if the user is not a member
+
 Behavior:
 - On subscribe:
-  - Validate path ID format (per OpenAPI).
-  - Extract user via [backend/libs/auth](backend/libs/auth/auth.go).
-  - Authorize membership (must be in lobby/game).
-  - Register stream if not present; increment connection counter; log lifecycle.
-  - Attach client to r3labs server stream; set headers; start delivery.
+  - Validate path ID format (UUID v4).
+  - Read the JWT from the configured cookie and validate via AuthService (POST /internal/validate).
+  - Call LobbyService (GET /internal/lobbies/{lobby_id}) to confirm membership.
+  - Attach client to the r3labs server stream for lobby:{lobby_id}; set headers; start delivery.
 - Heartbeat:
-  - Periodic keep_alive emitted by target-level goroutine (not per-connection).
+  - Per-connection keep_alive is emitted every HEARTBEAT_INTERVAL_MS (default 30s).
 - Auto-cleanup:
-  - On r.Context().Done(), decrement counter; log disconnect; no server-wide side effects.
+  - On r.Context().Done(), decrement counters; log disconnect; remove registry entry when the last connection ends.
 - Reconnection guidance:
-  - Clients should use exponential backoff; server emits heartbeats to keep intermediaries alive.
-  - Optionally provide "retry: 5000" SSE directive at stream start.
+  - Clients should implement exponential backoff if desired. The service does not emit an SSE retry directive.
 
 Errors:
-- 401 unauthorized (missing/invalid user context at gateway)
-- 403 forbidden (not in lobby/game)
-- 404 not found (target not registered or not found via authorizer)
+- 401 unauthorized (missing/invalid JWT cookie or token validation failed)
+- 403 forbidden (user is not a member of the target lobby)
+- 404 not found (lobby not found)
 - Error payloads standardized via [backend/libs/httpx](backend/libs/httpx/httpx.go)
 
-### Internal endpoints (protected)
+### Internal endpoints
 - POST /internal/publish
-  - Body: PublishEventRequest
-  - Behavior: find target entry; if target_user_id set, include in payload; broadcast via r3labs to stream; respond with counters: connections_found (registry count), events_sent, failed_connections.
-- POST /internal/register
-  - Pre-create target stream and registry entry (optional; first subscription also auto-creates).
-- POST /internal/unregister
-  - Send close event with reason to clients; stop heartbeat; remove stream and registry entry; return connections_closed.
-- GET /internal/connections
-  - Return stats: totals by lobbies/games and timestamp.
-
+  - Body (JSON):
+    - lobby_id: string (uuid)
+    - event_type: string (1–128 chars, must not be "keep_alive")
+    - data?: object
+  - Rules:
+    - Reject event_type "keep_alive" with 400 invalid_request.
+    - Reject non-object data with 400 invalid_request.
+    - On publish:
+      - If data is missing, create {"timestamp": <epoch_ms>}.
+      - If data is present, overwrite data.timestamp with <epoch_ms>.
+    - Unknown lobby: 404 target_not_found.
+    - No active connections for the lobby: still respond 200 with success=true and zero counters (connections_found=0, events_sent=0).
 - GET /healthcheck
   - Mounted via [backend/libs/healthcheck](backend/libs/healthcheck/healthcheck.go).
 
@@ -153,16 +147,15 @@ Errors:
 
 Router wiring: [internal/router.go](backend/services/SSEService/internal/router.go)
 
-Middleware chain:
+Middleware chain (conceptual):
 - logger.ChiMiddleware for structured request logs: [backend/libs/logger/middleware.go](backend/libs/logger/middleware.go)
-- Request ID correlation supplied by logger middleware
+- Request ID correlation (logger middleware)
 - CORS via go-chi/cors (allow EventSource with credentials)
-- Rate limiting via go-chi/httprate
-  - Public SSE endpoints exempt or set to very high limits
-  - Internal endpoints limited (e.g., 60 req/min per IP)
-- Internal-only auth (X-Internal-Token matched to env SSE_INTERNAL_TOKEN) for /internal routes
-- Auth middleware (libs/auth) to read user headers (X-User-ID, X-Username)
-- Authorizer middleware calling APIGateway/Lobby/Game services to ensure membership
+- Public SSE endpoint:
+  - JWTCookie validation by SSEService via AuthService (POST /internal/validate)
+  - Membership check via LobbyService (GET /internal/lobbies/{lobby_id})
+- Internal endpoints:
+  - No application-layer auth documented (isolated by reverse proxy in deployment)
 
 Mermaid (middleware chain):
 
@@ -170,23 +163,20 @@ Mermaid (middleware chain):
 graph TD
     A[Incoming Request] --> B[logger middleware]
     B --> C[CORS]
-    C --> D[rate limit]
-    D --> E{Path}
-    E -->|/internal/*| F[internal-only token check]
-    E -->|/events/*| G[auth: X-User-ID + X-Username]
-    G --> H[authorizer: membership check]
-    F --> I[handler]
-    H --> I[handler]
+    C --> D{Path}
+    D -->|/events/lobby/{id}| E[validate JWT via AuthService]
+    E --> F[authorize membership via LobbyService]
+    F --> G[handler]
+    D -->|/internal/*| G[handler]
 ```
 
 ## Error Model and httpx integration
 
 Standardized error JSON envelopes using [backend/libs/httpx](backend/libs/httpx/httpx.go):
-- 400 bad_request: invalid_request details when input invalid
-- 401 unauthorized: missing/invalid context from gateway
-- 403 forbidden: not a member of target
-- 404 not_found: target not registered or not found
-- 409 conflict: used when lifecycle conflicts arise (e.g., already_exists on register)
+- 400 bad_request: invalid_request details when input invalid (e.g., event_type "keep_alive", non-object data)
+- 401 unauthorized: invalid or expired authentication token
+- 403 forbidden: not a member of the lobby
+- 404 not_found: lobby not found (subscription) or target_not_found (publish)
 - 500 internal_error: unexpected failures
 
 Examples (payloads align with OpenAPI components/schemas/ErrorResponse):
@@ -204,34 +194,33 @@ Environment variables (documented; see [env.d/SSEService.env.example](env.d/SSES
 - LOG_LEVEL: debug|info|warn|error
 - LOG_COLOR: true|false
 - CORS_ALLOW_ORIGINS: comma-separated origins (e.g., https://knuffel.uni.de,http://localhost:5173)
-- CORS_ALLOW_HEADERS: defaults include Content-Type, Cookie, X-Request-ID
+- CORS_ALLOW_HEADERS: e.g., Content-Type, Cookie, X-Request-ID
 - CORS_ALLOW_METHODS: GET, POST, OPTIONS
 - CORS_ALLOW_CREDENTIALS: true|false
-- RATE_LIMIT_INTERNAL_PER_MINUTE: default 60
-- RATE_LIMIT_SSE_PER_MINUTE: default 0 (disabled/exempt) or very high (e.g., 10000)
-- JWT_COOKIE_NAME: cookie name used by gateway, default "jwt"
-- SSE_INTERNAL_TOKEN: shared secret for /internal (header X-Internal-Token)
-- HEARTBEAT_INTERVAL_MS: default 30000
+- JWT_COOKIE_NAME: cookie name for JWT, default "jwt"
+- HEARTBEAT_INTERVAL_MS: default 30000 (keep-alive is per-connection)
+- Note: Rate limits are disabled in the MVP.
 
 Placement: [env.d/SSEService.env.example](env.d/SSEService.env.example)
 
 ## Security Model
 
-- Public SSE endpoints:
-  - JWTCookie enforced by APIGateway; SSEService consumes X-User-ID and X-Username headers via [backend/libs/auth](backend/libs/auth/auth.go).
+- Public SSE endpoint:
+  - SSE behind a reverse proxy.
+  - JWT cookie is validated by the SSEService by calling AuthService (POST /internal/validate).
+  - OpenAPI uses operation-level JWTCookie security on GET /events/lobby/{lobby_id}; no root-level security.
 - Internal endpoints:
-  - Shared secret header X-Internal-Token must match SSE_INTERNAL_TOKEN.
-  - Future: mTLS option between internal services; document and gate via reverse proxy or middleware.
+  - No security schemes are documented in the spec. Isolation is provided by the reverse proxy in deployment.
+- Remove API Gateway-specific flows: The SSEService no longer depends on APIGateway for user context or membership checks.
 
 ## Logging and Observability
 
 Structured logs via [backend/libs/logger](backend/libs/logger/middleware.go):
 - Emit: http.method, http.path, http.status, http.duration_ms, http.request_id, http.remote_ip, http.user_agent
 - SSE lifecycle logs:
-  - connect: target_type, target_id, user_id
-  - disconnect: target_type, target_id, user_id, duration_ms
-  - publish: target_type, target_id, event_type, events_sent, failed_connections
-  - unregister: reason, connections_closed
+  - connect: lobby_id, user_id
+  - disconnect: lobby_id, user_id, duration_ms
+  - publish: lobby_id, event_type, events_sent, failed_connections
 - Correlate with X-Request-ID where available.
 
 ## Reconnect Logic Expectations
@@ -240,31 +229,27 @@ Clients:
 - Use EventSource with automatic reconnect.
 - Implement exponential backoff (e.g., initial 1s, cap 30s).
 - Keep connection alive via server heartbeats (keep_alive).
-- Optional server-provided "retry" directive; clients may choose to honor or override.
+- No server retry directive is emitted; clients manage backoff.
 
 Server:
-- Heartbeats emitted every HEARTBEAT_INTERVAL_MS.
-- Close events sent on unregister to hint clients to stop retrying for a target.
+- Heartbeats emitted every HEARTBEAT_INTERVAL_MS per connection.
 
 ## File and Package Layout Plan
 
-Create or extend the following files to implement the design:
+Implement or extend the following files based on the MVP design:
 
 - [cmd/SSEService/main.go](backend/services/SSEService/cmd/SSEService/main.go): bootstrap, config load, logger init, router init, server start
 - [internal/router.go](backend/services/SSEService/internal/router.go): chi router wiring, middleware application, route groups
 - [internal/models/config.go](backend/services/SSEService/internal/models/config.go): config struct and env binding
 - [internal/models/registry.go](backend/services/SSEService/internal/models/registry.go): registry types and methods (typed maps with RWMutex)
-- [internal/middleware/auth.go](backend/services/SSEService/internal/middleware/auth.go): header-based auth via libs/auth (X-User-ID/X-Username)
-- [internal/middleware/authorizer.go](backend/services/SSEService/internal/middleware/authorizer.go): membership checks against Lobby/Game via APIGateway
-- [internal/middleware/http.go](backend/services/SSEService/internal/middleware/http.go): CORS and rate-limiting policies
-- [internal/middleware/internal_only.go](backend/services/SSEService/internal/middleware/internal_only.go): internal header secret check
+- [internal/middleware/auth.go](backend/services/SSEService/internal/middleware/auth.go): JWTCookie validation via AuthService /internal/validate
+- [internal/middleware/authorizer.go](backend/services/SSEService/internal/middleware/authorizer.go): membership checks via LobbyService GET /internal/lobbies/{lobby_id}
+- [internal/middleware/http.go](backend/services/SSEService/internal/middleware/http.go): CORS policies
 - [internal/handlers/events_lobby.go](backend/services/SSEService/internal/handlers/events_lobby.go): SSE handler for lobby
-- [internal/handlers/events_game.go](backend/services/SSEService/internal/handlers/events_game.go): SSE handler for game
 - [internal/handlers/publish.go](backend/services/SSEService/internal/handlers/publish.go): broadcast handler
-- [internal/handlers/register.go](backend/services/SSEService/internal/handlers/register.go): pre-create stream/registry slot
-- [internal/handlers/unregister.go](backend/services/SSEService/internal/handlers/unregister.go): close connections, send close event, remove entry
-- [internal/handlers/stats.go](backend/services/SSEService/internal/handlers/stats.go): connection stats
 - [internal/handlers/errors.go](backend/services/SSEService/internal/handlers/errors.go): centralized error helpers using httpx
+
+Note: There are no MVP endpoints for game subscriptions, register/unregister, or connection stats.
 
 ## SSE Headers and Response Handling
 
@@ -273,12 +258,13 @@ On subscription:
   - Content-Type: text/event-stream
   - Cache-Control: no-cache
   - Connection: keep-alive
-- Ensure http.Flusher present; flush initial comment and optional `retry` directive.
+- Ensure http.Flusher present; flush initial comment if needed.
+- Do not emit an SSE retry directive.
 
 Keep-alive format (every 30s default):
 ```
 event: keep_alive
-data: {"timestamp":"2025-10-24T10:30:00Z"}
+data: {"timestamp": 1733220000000}
 ```
 
 ## Client Examples
@@ -286,22 +272,34 @@ data: {"timestamp":"2025-10-24T10:30:00Z"}
 Browser (EventSource):
 
 ```js
-const lobbyId = "lby_abc123";
+const lobbyId = "a8a68f18-9b1e-4d47-9b1c-1f4b0e5a2c63";
 const source = new EventSource(`/events/lobby/${lobbyId}`, { withCredentials: true });
 
 source.addEventListener("keep_alive", (e) => {
   const payload = JSON.parse(e.data);
-  console.debug("heartbeat", payload);
+  // data.timestamp is numeric epoch ms
+  const ts = Number(payload.timestamp);
+  console.debug("heartbeat", new Date(ts).toISOString(), payload);
 });
 
-source.addEventListener("player_joined", (e) => {
+source.addEventListener("lobby_updated", (e) => {
   const payload = JSON.parse(e.data);
+  // data.timestamp is numeric epoch ms
+  const ts = Number(payload.timestamp);
   // render UI update
+  console.log("lobby_updated @", ts, payload);
+});
+
+source.addEventListener("game_updated", (e) => {
+  const payload = JSON.parse(e.data);
+  // data.timestamp is numeric epoch ms
+  const ts = Number(payload.timestamp);
+  console.log("game_updated @", ts, payload);
 });
 
 source.onerror = (err) => {
   console.warn("SSE error", err);
-  // EventSource auto-reconnects; consider UI notice
+  // EventSource auto-reconnects; consider UI notice/backoff
 };
 ```
 
@@ -309,16 +307,32 @@ Node (eventsource package):
 
 ```js
 import EventSource from "eventsource";
-const gameId = "gam_xyz789";
-const es = new EventSource(`http://localhost:8084/events/game/${gameId}`, { headers: { Cookie: "jwt=..." } });
 
-es.addEventListener("turn_changed", (e) => {
+const lobbyId = "a8a68f18-9b1e-4d47-9b1c-1f4b0e5a2c63";
+// Supply cookie header with a valid JWT; URL points to SSEService directly in local dev
+const es = new EventSource(`http://localhost:8084/events/lobby/${lobbyId}`, {
+  headers: { Cookie: "jwt=..." },
+  withCredentials: true,
+});
+
+es.addEventListener("lobby_updated", (e) => {
   const payload = JSON.parse(e.data);
-  // handle turn change
+  const ts = Number(payload.timestamp);
+  // handle lobby update
+  console.log("lobby_updated @", ts, payload);
+});
+
+es.addEventListener("game_updated", (e) => {
+  const payload = JSON.parse(e.data);
+  const ts = Number(payload.timestamp);
+  // handle game-related update broadcast to the lobby
+  console.log("game_updated @", ts, payload);
 });
 
 es.addEventListener("keep_alive", (e) => {
-  // log heartbeat
+  const payload = JSON.parse(e.data);
+  const ts = Number(payload.timestamp);
+  console.log("heartbeat", ts);
 });
 
 es.onerror = (err) => {
@@ -328,61 +342,73 @@ es.onerror = (err) => {
 ```
 
 Reconnect/backoff guidance:
-- EventSource will retry automatically; clients can wrap with backoff when using custom libraries.
-- Server may emit `retry: 5000` at stream start as a hint.
+- EventSource will retry automatically; clients can wrap with additional backoff when using custom libraries.
+- The service does not emit an SSE retry directive.
 
 ## Operational Notes
 
 - Rate limits:
-  - Internal endpoints: 60 req/min/IP (configurable)
-  - SSE endpoints: exempt or very high limit (to avoid disconnects on long-lived connections)
+  - Disabled for MVP.
 - CORS:
-  - Allow configured origins, credentials=true for cookie-based auth
-  - Allow methods GET, POST, OPTIONS; Allow headers Content-Type, Cookie, X-Request-ID
-- Internal auth:
-  - Require X-Internal-Token header on /internal; compare to SSE_INTERNAL_TOKEN
+  - Configurable via environment variables (CORS_ALLOW_ORIGINS, CORS_ALLOW_METHODS, CORS_ALLOW_HEADERS, CORS_ALLOW_CREDENTIALS).
+- Internal endpoints:
+  - Isolated by reverse proxy; no application-layer security scheme in OpenAPI.
 - Observability:
   - Structured logs via libs/logger; ensure request_id correlation
   - Metrics counters inside registry; consider future Prometheus integration
 
-Mermaid (request flow):
+## Mermaid (request flow)
 
 ```mermaid
 sequenceDiagram
     participant Client
-    participant APIGateway
+    participant ReverseProxy
     participant SSEService
+    participant AuthService
+    participant LobbyService
     participant Lobby/Game
 
-    Client->>APIGateway: GET /events/lobby/{id} (Cookie: jwt)
-    APIGateway->>APIGateway: Validate JWT (AuthService)
-    APIGateway->>SSEService: Forward with headers (X-User-ID, X-Username)
-    SSEService->>SSEService: Authorize membership (via Lobby/Game)
+    Client->>ReverseProxy: GET /events/lobby/{lobby_id} (Cookie: jwt)
+    ReverseProxy->>SSEService: Forward request
+    SSEService->>AuthService: POST /internal/validate (validate JWT)
+    AuthService-->>SSEService: 200 valid | 401 invalid
+    SSEService->>LobbyService: GET /internal/lobbies/{lobby_id}
+    LobbyService-->>SSEService: 200 member | 403 not member | 404 not found
     SSEService-->>Client: SSE stream (keep_alive + events)
-    Lobby/Game->>SSEService: POST /internal/publish (event)
-    SSEService-->>Client: event: <type>, data: <payload>
+    Lobby/Game->>SSEService: POST /internal/publish (event_type + data)
+    SSEService-->>Client: event: <event_type>, data: { ... "timestamp": <epoch_ms> }
 ```
 
 ## Testing Strategy
 
 Unit tests:
-- Registry: add/register/unregister, counters, heartbeat start/stop, publish counters
-- Handlers: input validation, error responses via httpx, internal token protection
+- Registry: implicit create on subscribe, removal when last connection ends, counters, publish counters
+- Handlers: input validation, error responses via httpx
+- Publish handler:
+  - Reject event_type "keep_alive" with 400
+  - Reject non-object data with 400
+  - Overwrite data.timestamp with numeric epoch ms (when provided)
+  - Create {"timestamp": <epoch_ms>} when data is missing
+- SSE headers: correct Content-Type, Cache-Control, Connection
 
 Integration tests:
-- Simulate multiple SSE clients across lobbies/games
-- Publish flows (broadcast + target_user_id)
-- Unregister closes and removes registry; clients receive close event
-- Reconnection behavior: clients reconnect after transient disconnect; heartbeat prevents idle timeouts
+- Subscribe to /events/lobby/{lobby_id} (no /events/game)
+- Membership check via LobbyService internal endpoint (403/404 behavior)
+- Publish flows (events delivered to connected clients)
+- Keep-alive per-connection every 30s (assert periodic keep_alive with numeric epoch ms)
+- No retry directive assertions
 
 Test layout:
 - Place tests under [backend/services/SSEService/internal](backend/services/SSEService/internal) mirroring handlers and models.
 
 ## Implementation Notes and TODOs
 
-- Use r3labs/sse.Server with per-target streams; mount server handler under /events/* routes via a custom wrapper that sets headers and increments/decrements registry counters on connect/disconnect using r.Context().Done().
-- Authorizer middleware calls APIGateway/Lobby/Game (HTTP) to confirm membership; cache positive checks briefly if needed.
-- Consider future strict per-user isolation via secondary per-user streams; current design includes target_user_id filtering in payload for simplicity.
+- Use r3labs/sse.Server with per-lobby streams; mount server handler under /events/lobby/{lobby_id} via a custom wrapper that sets headers and increments/decrements registry counters on connect/disconnect using r.Context().Done().
+- Auth: validate JWTCookie via AuthService (POST /internal/validate).
+- Membership: call LobbyService GET /internal/lobbies/{lobby_id}.
+- No register/unregister or connections stats endpoints in MVP.
+- event_type is free-form; keep_alive reserved by service.
+- data is object; data.timestamp is a numeric epoch ms injected/overwritten for every event.
 
 ## Build and Run
 
@@ -393,7 +419,7 @@ go build -o sse-service ./cmd/SSEService
 
 Run:
 ```bash
-PORT=8084 LOG_LEVEL=info SSE_INTERNAL_TOKEN=change_me ./sse-service
+PORT=8084 LOG_LEVEL=info ./sse-service
 ```
 
 Healthcheck:

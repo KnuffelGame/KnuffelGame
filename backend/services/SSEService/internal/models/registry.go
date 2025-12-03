@@ -12,20 +12,17 @@ type TargetType string
 const (
 	// lobby target type for lobby streams
 	TargetTypeLobby TargetType = "lobby"
-	// game target type for game streams
-	TargetTypeGame TargetType = "game"
+	// TargetTypeGame removed in MVP - only lobby streams supported
 )
 
 // TargetKey is the composite key used in the registry map.
 type TargetKey string
 
-// MakeTargetKey composes a registry key like "lobby:{id}" or "game:{id}".
+// MakeTargetKey composes a registry key like "lobby:{id}".
 func MakeTargetKey(tt TargetType, id string) TargetKey {
 	switch tt {
 	case TargetTypeLobby:
 		return TargetKey(fmt.Sprintf("lobby:%s", id))
-	case TargetTypeGame:
-		return TargetKey(fmt.Sprintf("game:%s", id))
 	default:
 		// Fallback to raw string to avoid surprises
 		return TargetKey(fmt.Sprintf("%s:%s", string(tt), id))
@@ -230,6 +227,7 @@ func (r *Registry) Broadcast(tt TargetType, id string, msg SSEMessage, targetUse
 }
 
 // Stats returns aggregate totals across the registry.
+// Note: MVP only supports lobby targets, so gameCount and gameConnections will always be 0.
 func (r *Registry) Stats() (totalTargets int, totalConnections int, lobbyCount int, lobbyConnections int, gameCount int, gameConnections int) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -243,11 +241,8 @@ func (r *Registry) Stats() (totalTargets int, totalConnections int, lobbyCount i
 		case TargetTypeLobby:
 			lobbyCount++
 			lobbyConnections += connCount
-		case TargetTypeGame:
-			gameCount++
-			gameConnections += connCount
 		default:
-			// ignore
+			// MVP only supports lobby targets
 		}
 	}
 

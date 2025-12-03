@@ -75,7 +75,6 @@ paths:
               newGuestUser:
                 summary: New guest user
                 value:
-                  user_id: "550e8400-e29b-41d4-a716-446655440000"
                   username: "Alice"
       responses:
         '200':
@@ -88,6 +87,8 @@ paths:
                 success:
                   value:
                     token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c3JfdmFsaWQiLCJuYW1lIjoiQWxpY2UiLCJndWVzdCI6dHJ1ZSwiaWF0IjoxNjk4MzQ1NjAwLCJleHAiOjE2OTg0MzIwMDAsImlzcyI6ImtudWZmZWwtYXV0aC1zZXJ2aWNlIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+                    username: "Alice"
+                    user_id: "550e8400-e29b-41d4-a716-446655440000"
         '400':
           description: Invalid request (malformed JSON or validation failure)
           content:
@@ -225,14 +226,8 @@ components:
     CreateTokenRequest:
       type: object
       required:
-        - user_id
         - username
       properties:
-        user_id:
-          type: string
-          description: Unique user identifier (UUID v4)
-          example: "550e8400-e29b-41d4-a716-446655440000"
-          format: uuid
         username:
           type: string
           description: Display name for the user (letters, digits, spaces)
@@ -244,12 +239,23 @@ components:
       type: object
       required:
         - token
+        - username
+        - user_id
       properties:
         token:
           type: string
           description: JWT token (valid for 24h)
           pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
           example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c3JfdmFsaWQiLCJuYW1lIjoiQWxpY2UiLCJndWVzdCI6dHJ1ZSwiaWF0IjoxNjk4MzQ1NjAwLCJleHAiOjE2OTg0MzIwMDAsImlzcyI6ImtudWZmZWwtYXV0aC1zZXJ2aWNlIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+        username:
+          type: string
+          description: Display name for the user
+          example: "Alice"
+        user_id:
+          type: string
+          description: Unique user identifier
+          example: "550e8400-e29b-41d4-a716-446655440000"
+          format: uuid
     ValidateTokenRequest:
       type: object
       required:

@@ -1,8 +1,9 @@
 package models
 
 import (
-	"github.com/go-playground/validator/v10"
 	"regexp"
+
+	"github.com/go-playground/validator/v10"
 )
 
 // ErrorResponse matches the shared error schema.
@@ -19,11 +20,10 @@ var (
 	jwtStructRegex = regexp.MustCompile(`^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$`)
 )
 
-// CreateJWTRequest now requires user_id and username.
+// CreateJWTRequest requires username.
 // Guest flag removed; service only issues guest tokens implicitly.
 
 type CreateJWTRequest struct {
-	UserID   string `json:"user_id" validate:"required,uuid4"`
 	Username string `json:"username" validate:"required,min=3,max=20,usernameFmt"`
 }
 
@@ -34,7 +34,9 @@ type ValidateJWTRequest struct {
 // CreateTokenResponse response for create token.
 
 type CreateTokenResponse struct {
-	Token string `json:"token"`
+	Token    string `json:"token"`
+	Username string `json:"username"`
+	UserID   string `json:"user_id"`
 }
 
 // ValidateTokenResponse response for validate token.

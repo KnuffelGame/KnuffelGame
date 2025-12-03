@@ -28,7 +28,7 @@ Basis-URL: Service-Root (z. B. `http://auth-service:8081`)
 | Methode | Pfad                | Beschreibung                    |
 |--------:|---------------------|---------------------------------|
 | GET     | /healthcheck        | Liveness-Check                  |
-| POST    | /internal/create    | Gast-JWT erzeugen               |
+| POST    | /internal/create    | Gast-JWT erzeugen |
 | POST    | /internal/validate  | JWT validieren                  |
 
 ### POST /internal/create
@@ -36,7 +36,6 @@ Basis-URL: Service-Root (z. B. `http://auth-service:8081`)
 Request (JSON):
 ```json
 {
-  "user_id": "550e8400-e29b-41d4-a716-446655440000",
   "username": "GuestUser"
 }
 ```
@@ -44,7 +43,11 @@ Request (JSON):
 Antworten:
 - 200 OK:
   ```json
-  { "token": "<jwt>" }
+  {
+    "token": "<jwt>",
+    "username": "GuestUser",
+    "user_id": "550e8400-e29b-41d4-a716-446655440000"
+  }
   ```
 - 400 Bad Request (ungültiges JSON oder Validierungsfehler):
   ```json
@@ -62,9 +65,12 @@ Antworten:
   }
   ```
 
-Validierungsregeln:
-- user_id: UUID4 (Formatprüfung im Request-Modell)
+Validierungsregeln (Request):
 - username: 3–20 Zeichen; erlaubte Zeichen: Buchstaben, Ziffern, Leerzeichen
+
+Validierungsregeln (Response):
+- username: 3–20 Zeichen; erlaubte Zeichen: Buchstaben, Ziffern, Leerzeichen
+- user_id: UUID4
 
 Header:
 - Content-Type: `application/json` (erforderlich)
@@ -266,12 +272,12 @@ cURL – Token erzeugen:
 ```bash
 curl -s -X POST 'http://localhost:8081/internal/create' \
   -H 'Content-Type: application/json' \
-  -d '{"user_id":"11111111-1111-4111-8111-111111111111","username":"GuestUser"}'
+  -d '{"username":"GuestUser"}'
 ```
 
 cURL – Token validieren:
 ```bash
-TOKEN=$(curl -s -X POST 'http://localhost:8081/internal/create' -H 'Content-Type: application/json' -d '{"user_id":"11111111-1111-4111-8111-111111111111","username":"GuestUser"}' | jq -r .token)
+TOKEN=$(curl -s -X POST 'http://localhost:8081/internal/create' -H 'Content-Type: application/json' -d '{"username":"GuestUser"}' | jq -r .token)
 curl -s -X POST 'http://localhost:8081/internal/validate' \
   -H 'Content-Type: application/json' \
   -d '{"token":"'$TOKEN'"}' | jq .
@@ -290,7 +296,7 @@ import (
 
 func main() {
   // Create
-  createBody := []byte(`{"user_id":"11111111-1111-4111-8111-111111111111","username":"GuestUser"}`)
+  createBody := []byte(`{"username":"GuestUser"}`)
   resp, _ := http.Post("http://localhost:8081/internal/create", "application/json", bytes.NewReader(createBody))
   var createRes map[string]string
   json.NewDecoder(resp.Body).Decode(&createRes)

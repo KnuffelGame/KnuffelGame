@@ -13,7 +13,7 @@ import (
 func TestCreateToken_Success(t *testing.T) {
 	gen := jwt.NewGenerator("12345678901234567890123456789012")
 	h := CreateTokenHandler(gen)
-	body, _ := json.Marshal(map[string]interface{}{"username": "Alice", "user_id": "550e8400-e29b-41d4-a716-446655440000"})
+	body, _ := json.Marshal(map[string]interface{}{"username": "Alice"})
 	req := httptest.NewRequest(http.MethodPost, "/internal/create", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -25,12 +25,18 @@ func TestCreateToken_Success(t *testing.T) {
 	if _, ok := resp["token"].(string); !ok || resp["token"].(string) == "" {
 		t.Fatalf("expected token field, got %+v", resp)
 	}
+	if _, ok := resp["username"].(string); !ok || resp["username"].(string) != "Alice" {
+		t.Fatalf("expected username field, got %+v", resp)
+	}
+	if _, ok := resp["user_id"].(string); !ok || resp["user_id"].(string) == "" {
+		t.Fatalf("expected user_id field, got %+v", resp)
+	}
 }
 
-func TestCreateToken_MissingUserID(t *testing.T) {
+func TestCreateToken_MissingUsername(t *testing.T) {
 	gen := jwt.NewGenerator("12345678901234567890123456789012")
 	h := CreateTokenHandler(gen)
-	body, _ := json.Marshal(map[string]interface{}{"username": "Alice"})
+	body, _ := json.Marshal(map[string]interface{}{})
 	req := httptest.NewRequest(http.MethodPost, "/internal/create", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -42,7 +48,7 @@ func TestCreateToken_MissingUserID(t *testing.T) {
 func TestCreateToken_ValidationFail(t *testing.T) {
 	gen := jwt.NewGenerator("12345678901234567890123456789012")
 	h := CreateTokenHandler(gen)
-	body, _ := json.Marshal(map[string]interface{}{"username": "Al", "user_id": "550e8400-e29b-41d4-a716-446655440000"}) // username too short
+	body, _ := json.Marshal(map[string]interface{}{"username": "Al"}) // username too short
 	req := httptest.NewRequest(http.MethodPost, "/internal/create", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -54,7 +60,7 @@ func TestCreateToken_ValidationFail(t *testing.T) {
 func TestCreateToken_UnknownField(t *testing.T) {
 	gen := jwt.NewGenerator("12345678901234567890123456789012")
 	h := CreateTokenHandler(gen)
-	body, _ := json.Marshal(map[string]interface{}{"username": "Alice", "user_id": "550e8400-e29b-41d4-a716-446655440000", "extra": "x"})
+	body, _ := json.Marshal(map[string]interface{}{"username": "Alice", "extra": "x"})
 	req := httptest.NewRequest(http.MethodPost, "/internal/create", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	h(rec, req)
