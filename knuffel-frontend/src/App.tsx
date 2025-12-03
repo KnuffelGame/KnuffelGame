@@ -1,31 +1,19 @@
-// src/App.tsx
+import { BrowserRouter as Router, Routes, Route } from "react-router-dom"
+import HomePage from "./pages/HomePage"
+import LobbyPage from "./pages/LobbyPage"
+import GamePage from "./pages/GamePage"
+import "./App.css"
 
-import React from 'react';
-import { 
-  BrowserRouter as Router, 
-  Routes, 
-  Route 
-} from 'react-router-dom';
-
-// Importieren Sie die implementierten Seiten
-import HomePage from './pages/HomePage'; 
-import LobbyPage from './pages/LobbyPage'; 
-
-const App: React.FC = () => {
+function App() {
   return (
-    // Der Router umgibt die gesamte Anwendung
     <Router>
       <Routes>
-        {/* Route für die Startseite (Task 7.6) */}
         <Route path="/" element={<HomePage />} />
-        
-        {/* Route für die Lobby-Ansicht (Task 7.7) - Das Ziel des Redirects */}
-        <Route path="/lobby/:code" element={<LobbyPage />} /> 
-
-        {/* Weitere Routen (z.B. /game/:id) kommen später hierher */}
+        <Route path="/lobby/:lobbyId" element={<LobbyPage />} />
+        <Route path="/game/:gameId" element={<GamePage />} />
       </Routes>
     </Router>
-  );
-};
+  )
+}
 
-export default App;
+export default App

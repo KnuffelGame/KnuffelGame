@@ -1,41 +1,69 @@
-/* src/index.css */
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
-/* Setzt den globalen Hintergrund auf hellrosa und zentriert den Inhalt */
-:root {
-  background-color: #fce4ec; /* Hellrosa */
+@theme inline {
+  /* Pink/Rose Color Palette */
+  --color-background: #fef2f2;
+  --color-foreground: #1f2937;
+
+  --color-primary: #ec4899;
+  --color-primary-foreground: #ffffff;
+
+  --color-secondary: #fbcfe8;
+  --color-secondary-foreground: #831843;
+
+  --color-accent: #f472b6;
+  --color-accent-foreground: #ffffff;
+
+  --color-muted: #fce7f3;
+  --color-muted-foreground: #6b7280;
+
+  --color-card: #ffffff;
+  --color-card-foreground: #1f2937;
+
+  --color-border: #f9a8d4;
+
+  --radius: 1rem;
 }
 
 body {
   margin: 0;
-  padding: 0;
-  min-height: 100vh;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen", "Ubuntu", "Cantarell", "Fira Sans",
+    "Droid Sans", "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-#root {
-  width: 100%;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
+/* Custom animations */
+@keyframes wiggle {
+  0%,
+  100% {
+    transform: rotate(-3deg);
+  }
+  50% {
+    transform: rotate(3deg);
+  }
 }
 
-/* 3. Korrektur für das Root-Element: Stellt sicher, dass das Haupt-DIV (#root)
-   die volle Bildschirmhöhe einnimmt und den Inhalt zentriert.
-*/
-#root {
-  /* Muss die volle Höhe des body-Elements einnehmen */
-  width: 100%;
-  min-height: 100vh;
-  
-  /* Flexbox-Eigenschaften für die Zentrierung des Inhalts (der App-Komponente) */
-  display: flex;
-  flex-direction: column;
-  align-items: center; /* Zentriert horizontal */
-  justify-content: center; /* Zentriert vertikal */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
-/* Optional: Wenn Sie eine bessere Schriftart global wünschen, hier einfügen */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.max-width-md {
+  max-width: 28rem;
+}
