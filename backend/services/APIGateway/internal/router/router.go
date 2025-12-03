@@ -9,6 +9,7 @@ import (
 	"github.com/KnuffelGame/KnuffelGame/backend/libs/logger"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 
 	"github.com/KnuffelGame/KnuffelGame/backend/services/APIGateway/internal/handlers"
 	authmw "github.com/KnuffelGame/KnuffelGame/backend/services/APIGateway/internal/middleware"
@@ -23,6 +24,16 @@ func New(cfg *config.Config, log *slog.Logger) http.Handler {
 	// Request correlation and logging (outermost)
 	r.Use(middleware.RequestID)
 	r.Use(logger.ChiMiddleware(log))
+
+	// CORS middleware
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   []string{"*"}, // Allow all origins for development; configure properly for production
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		ExposedHeaders:   []string{"Link"},
+		AllowCredentials: true,
+		MaxAge:           300, // Maximum value not ignored by any of major browsers
+	}))
 
 	// Healthcheck (bypass auth)
 	healthcheck.Mount(r)

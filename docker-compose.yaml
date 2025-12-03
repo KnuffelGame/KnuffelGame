@@ -91,6 +91,27 @@ services:
       retries: 3
       start_period: 80s
 
+  SwaggerUI:
+    image: swaggerapi/swagger-ui:latest
+    volumes:
+      - ./backend/services/APIGateway/openapi.yaml:/usr/share/nginx/html/specs/APIGateway.yaml:ro
+      - ./backend/services/AuthService/openapi.yaml:/usr/share/nginx/html/specs/AuthService.yaml:ro
+      - ./backend/services/GameService/openapi.yaml:/usr/share/nginx/html/specs/GameService.yaml:ro
+      - ./backend/services/LobbyService/openapi.yaml:/usr/share/nginx/html/specs/LobbyService.yaml:ro
+      - ./backend/services/SSEService/openapi.yaml:/usr/share/nginx/html/specs/SSEService.yaml:ro
+    ports:
+      - 9000:8080
+    environment:
+      URLS_PRIMARY_NAME: "API Gateway"
+      URLS: |
+        [
+          {"url": "/specs/APIGateway.yaml", "name": "API Gateway"},
+          {"url": "/specs/AuthService.yaml", "name": "Auth Service"},
+          {"url": "/specs/GameService.yaml", "name": "Game Service"},
+          {"url": "/specs/LobbyService.yaml", "name": "Lobby Service"},
+          {"url": "/specs/SSEService.yaml", "name": "SSE Service"}
+        ]
+
 
 volumes:
   node-modules-frontend:
