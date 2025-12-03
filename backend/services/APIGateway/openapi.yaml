@@ -464,13 +464,20 @@ components:
           example: "Alice"
     JoinLobbyRequest:
       type: object
-      required: [join_code]
+      required: [join_code, username]
       properties:
         join_code:
           type: string
           minLength: 6
           maxLength: 6
           example: "ABC123"
+        username:
+          type: string
+          description: Display name for the user (letters, digits, spaces)
+          minLength: 3
+          maxLength: 20
+          pattern: '^[A-Za-z0-9 ]+$'
+          example: "Alice"
     KickPlayerRequest:
       type: object
       required: [target_user_id]
