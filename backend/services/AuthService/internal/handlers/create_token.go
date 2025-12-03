@@ -9,12 +9,13 @@ import (
 	"github.com/KnuffelGame/KnuffelGame/backend/libs/logger"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/AuthService/internal/jwt"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/AuthService/internal/models"
+	"github.com/google/uuid"
 )
 
 const maxBodySize = 1 << 20 // 1MB
 
 // CreateTokenHandler returns an http.HandlerFunc bound to a JWT generator.
-// Requires user_id and username. Guest tokens only; guest claim always true.
+// Requires username. Generates user_id. Guest tokens only; guest claim always true.
 func CreateTokenHandler(gen *jwt.Generator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
@@ -33,14 +34,16 @@ func CreateTokenHandler(gen *jwt.Generator) http.HandlerFunc {
 			httpx.WriteError(w, http.StatusBadRequest, "invalid_request", "Validation failed", map[string]interface{}{"fields": errMap}, log)
 			return
 		}
+		// Generate a new user ID for the guest user
+		userID := uuid.New().String()
 		// Always guest tokens from this service
-		token, err := gen.CreateToken(req.UserID, req.Username, true)
+		token, err := gen.CreateToken(userID, req.Username, true)
 		if err != nil {
-			log.Error("token generation failed", slog.String("error", err.Error()), slog.String("user_id", req.UserID))
+			log.Error("token generation failed", slog.String("error", err.Error()), slog.String("user_id", userID))
 			httpx.WriteError(w, http.StatusInternalServerError, "token_generation_failed", "Failed to generate JWT token", map[string]interface{}{"detail": err.Error()}, log)
 			return
 		}
-		log.Info("token generated", slog.String("user_id", req.UserID), slog.String("username", req.Username), slog.Bool("guest", true))
-		httpx.WriteJSON(w, http.StatusOK, models.CreateTokenResponse{Token: token}, log)
+		log.Info("token generated", slog.String("user_id", userID), slog.String("username", req.Username), slog.Bool("guest", true))
+		httpx.WriteJSON(w, http.StatusOK, models.CreateTokenResponse{Token: token, Username: req.Username, UserID: userID}, log)
 	}
 }
