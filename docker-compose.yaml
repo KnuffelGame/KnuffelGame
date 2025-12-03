@@ -21,6 +21,12 @@ services:
     pull_policy: build
     build:
       context: backend/services/APIGateway
+    env_file:
+      - env.d/APIGateway.env
+    depends_on:
+      - AuthService
+      - LobbyService
+      - GameService
     ports:
       - 8080:8080
 
