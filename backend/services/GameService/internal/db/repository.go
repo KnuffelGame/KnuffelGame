@@ -137,3 +137,96 @@ func (r *Repository) CreateScorecard(ctx context.Context, m *models.ScorecardDB)
 	}
 	return nil
 }
+
+// GetGameByID nutzt jetzt r.db.QueryRowContext
+func (r *Repository) GetGameByID(ctx context.Context, gameID string) (*models.GameDB, error) {
+	query := `SELECT id, lobby_id, status, current_turn, turn_order, round, started_at, ended_at 
+              FROM games WHERE id = $1`
+
+	// Hier wird QueryRowContext aufgerufen (funktioniert mit DB oder Tx)
+	row := r.db.QueryRowContext(ctx, query, gameID)
+
+	var g models.GameDB
+	err := row.Scan(&g.ID, &g.LobbyID, &g.Status, &g.CurrentTurn, &g.TurnOrder, &g.Round, &g.StartedAt, &g.EndedAt)
+	if err != nil {
+		return nil, err // caller prüft auf sql.ErrNoRows
+	}
+	return &g, nil
+}
+
+// UpdateTurn
+func (r *Repository) UpdateTurn(ctx context.Context, t *models.TurnDB) error {
+	diceValJSON, _ := json.Marshal(t.DiceValues)
+	keptDiceJSON, _ := json.Marshal(t.KeptDice)
+
+	query := `UPDATE turns 
+              SET roll_count = $1, dice_values = $2, kept_dice = $3, started_at = $4 
+              WHERE id = $5`
+
+	// Auch ExecContext ist Teil von DBTX
+	_, err := r.db.ExecContext(ctx, query, t.RollCount, diceValJSON, keptDiceJSON, t.StartedAt, t.ID)
+	return err
+}
+
+// GetCurrentTurn sucht den aktuellen, noch offenen Spielzug des Users.
+func (r *Repository) GetCurrentTurn(ctx context.Context, gameID, userID string) (*models.TurnDB, error) {
+	// Die Query sucht nach einem Turn für diesen User in diesem Spiel.
+	// WICHTIG: "AND ended_at IS NULL" stellt sicher, dass wir keinen alten, abgeschlossenen Zug laden.
+	query := `
+        SELECT id, game_id, user_id, roll_count, dice_values, kept_dice, timeout, started_at, ended_at
+        FROM turns
+        WHERE game_id = $1 AND user_id = $2 AND ended_at IS NULL
+        LIMIT 1
+    `
+
+	var t models.TurnDB
+
+	// Wir brauchen temporäre Variablen für die JSON-Spalten,
+	// da SQL-Treiber JSON meist als []byte zurückgeben.
+	var diceValJSON []byte
+	var keptDiceJSON []byte
+
+	// Ausführung über das DBTX Interface (r.db)
+	err := r.db.QueryRowContext(ctx, query, gameID, userID).Scan(
+		&t.ID,
+		&t.GameID,
+		&t.UserID,
+		&t.RollCount,
+		&diceValJSON,  // Scannt JSON-Daten
+		&keptDiceJSON, // Scannt JSON-Daten
+		&t.Timeout,
+		&t.StartedAt,
+		&t.EndedAt, // Pointer *time.Time fängt NULL sauber ab
+	)
+
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// Das ist kein Fehler! Es bedeutet nur, dass der Spieler in dieser Runde
+			// noch nicht gewürfelt hat. Wir geben nil zurück.
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	// JSON-Daten aus der DB in die Go-Structs (Slices) umwandeln
+	// Falls die Felder in der DB NULL wären, sind die Byte-Slices leer/nil -> Unmarshal ignoriert das oder gibt Fehler.
+	// Wir initialisieren sicherheitshalber leere Slices bei Fehler/Nil.
+
+	if len(diceValJSON) > 0 {
+		if err := json.Unmarshal(diceValJSON, &t.DiceValues); err != nil {
+			return nil, err // oder loggen und leeren Slice lassen
+		}
+	} else {
+		t.DiceValues = []int{}
+	}
+
+	if len(keptDiceJSON) > 0 {
+		if err := json.Unmarshal(keptDiceJSON, &t.KeptDice); err != nil {
+			return nil, err
+		}
+	} else {
+		t.KeptDice = []bool{}
+	}
+
+	return &t, nil
+}

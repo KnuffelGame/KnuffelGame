@@ -108,3 +108,26 @@ type TurnDB struct {
 	StartedAt  time.Time  `json:"started_at"`
 	EndedAt    *time.Time `json:"ended_at"`
 }
+
+// models/responses.go (oder in deine existierende Datei)
+
+// RollDiceResponse entspricht dem Schema '#/components/schemas/RollDiceResponse'
+type RollDiceResponse struct {
+	GameID          string `json:"game_id"`
+	RollCount       int    `json:"roll_count"`
+	Dice            []Dice `json:"dice"`
+	CanRollAgain    bool   `json:"can_roll_again"`
+	MustSelectField bool   `json:"must_select_field"`
+}
+
+// ErrorResponse definiert die Struktur für detaillierte Fehler (403)
+type ErrorResponse struct {
+	Error   string       `json:"error"`   // z.B. "forbidden"
+	Message string       `json:"message"` // z.B. "It's not your turn"
+	Details ErrorDetails `json:"details,omitempty"`
+}
+
+type ErrorDetails struct {
+	CurrentPlayer string `json:"current_player,omitempty"`
+	RollCount     int    `json:"roll_count,omitempty"`
+}

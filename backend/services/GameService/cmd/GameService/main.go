@@ -10,6 +10,7 @@ import (
 	"github.com/KnuffelGame/KnuffelGame/backend/libs/logger"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/GameService/internal/db"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/GameService/internal/handlers"
+	"github.com/KnuffelGame/KnuffelGame/backend/services/GameService/internal/services"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/GameService/pkg/config"
 	"github.com/gin-gonic/gin"
 
@@ -85,8 +86,10 @@ func main() {
 	// Ich gehe hier vom Standard aus:
 	gameRepo := db.NewRepository(srv.dbConn)
 
+	gameService := services.NewGameService(gameRepo)
+
 	// Handler erstellen
-	gameHandler := handlers.NewHandler(gameRepo, srv.logger)
+	gameHandler := handlers.NewHandler(gameRepo, srv.logger, gameService)
 
 	// 6. Routen registrieren
 	srv.registerRoutes(gameHandler)
@@ -109,6 +112,7 @@ func (s *Server) registerRoutes(gameHandler *handlers.Handler) {
 	// Game Routes
 	// s.router.GET("/games/:game_id", gameHandler.GetGameState)
 	s.router.POST("/internal/create", gameHandler.CreateGame)
+	s.router.POST("/games/:game_id/roll", gameHandler.PostRollDice)
 }
 
 // healthCheckHandler ist ein einfacher Handler für den Health-Check.

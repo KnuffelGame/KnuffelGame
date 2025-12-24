@@ -9,19 +9,22 @@ import (
 
 	"github.com/KnuffelGame/KnuffelGame/backend/services/GameService/internal/db"
 	"github.com/KnuffelGame/KnuffelGame/backend/services/GameService/internal/models"
+	"github.com/KnuffelGame/KnuffelGame/backend/services/GameService/internal/services"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
 type Handler struct {
-	repo   *db.Repository
-	logger *slog.Logger
+	repo       *db.Repository
+	logger     *slog.Logger
+	diceEngine *services.GameService
 }
 
-func NewHandler(repo *db.Repository, logger *slog.Logger) *Handler {
+func NewHandler(repo *db.Repository, logger *slog.Logger, diceEngine *services.GameService) *Handler {
 	return &Handler{
-		repo:   repo,
-		logger: logger,
+		repo:       repo,
+		logger:     logger,
+		diceEngine: diceEngine,
 	}
 }
 
@@ -54,9 +57,6 @@ func NewHandler(repo *db.Repository, logger *slog.Logger) *Handler {
 //}
 
 func (h *Handler) CreateGame(c *gin.Context) {
-	// TODO
-	// create GameState, TurnOrder
-	// insert Scoreboards for all players
 	var req models.CreateGameRequest
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -94,7 +94,7 @@ func (h *Handler) CreateGame(c *gin.Context) {
 			ID:          gameID,
 			LobbyID:     req.LobbyID,
 			Status:      "active",
-			CurrentTurn: 0,
+			CurrentTurn: 1,
 			TurnOrder:   turnOrderJSON, // Hier wird das JSON gespeichert
 			Round:       1,
 			StartedAt:   startTime,
@@ -162,4 +162,55 @@ func (h *Handler) CreateGame(c *gin.Context) {
 
 	h.logger.Info("Game created successfully", "game_id", gameID, "lobby_id", req.LobbyID)
 	c.JSON(http.StatusCreated, response)
+}
+
+func (h *Handler) PostRollDice(c *gin.Context) {
+	gameID := c.Param("game_id")
+	userID := c.GetHeader("user_id")
+
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing User-Id header"})
+		return
+	}
+
+	// Service Aufruf
+	response, err := h.diceEngine.RollDice(c, gameID, userID)
+
+	if err != nil {
+		switch err {
+		case services.ErrGameNotFound:
+			c.JSON(http.StatusNotFound, gin.H{"error": "Game not found"})
+
+		case services.ErrNotYourTurn:
+			// OpenAPI: 403 Forbidden - Not current player
+			// In einer echten App würdest du hier den "current_player" Namen aus der DB holen
+			c.JSON(http.StatusForbidden, models.ErrorResponse{
+				Error:   "forbidden",
+				Message: "It's not your turn",
+				Details: models.ErrorDetails{
+					CurrentPlayer: "other_player_id", // Hier den echten ID einsetzen
+				},
+			})
+
+		case services.ErrMaxRolls:
+			// OpenAPI: 403 Forbidden - Max rolls reached
+			c.JSON(http.StatusForbidden, models.ErrorResponse{
+				Error:   "forbidden",
+				Message: "Maximum rolls (3) reached - must select a field",
+				Details: models.ErrorDetails{
+					RollCount: 3,
+				},
+			})
+
+		case services.ErrGameNotActive:
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Game is not running"})
+
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+		}
+		return
+	}
+
+	// 200 OK
+	c.JSON(http.StatusOK, response)
 }
