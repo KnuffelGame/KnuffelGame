@@ -18,17 +18,10 @@ func (s *GameService) validateTurn(game *models.GameDB, userID string) error {
 		return models.ErrInternal
 	}
 
-	//// Berechne Index (1-basiert -> 0-basiert)
-	//if game.CurrentTurn < 1 {
-	//	// Fallback, falls DB 0 zurückgibt, um Panic/falschen Index zu vermeiden
-	//	log.Printf("WARN: CurrentTurn ist < 1 (%d). Setze auf 1.", game.CurrentTurn)
-	//	game.CurrentTurn = 1
-	//}
-
 	playerIndex := (game.CurrentTurn - 1) % len(turnOrder)
 	expectedPlayerID := turnOrder[playerIndex]
 
-	if expectedPlayerID != userID {
+	if expectedPlayerID.PlayerID != userID {
 		log.Printf("DEBUG: Not your turn. expectedPlayerID=%s, userID=%s\n\n", expectedPlayerID, userID)
 		return ErrNotYourTurn
 	}
@@ -66,7 +59,8 @@ func CalculateFieldScore(dice []int, fieldName string) (int, error) {
 		return counts[5] * 5, nil
 	case "sixes":
 		return counts[6] * 6, nil
-
+	case "bonus":
+		return 0, models.ErrBonusCannotBeSelected
 	// --- UNTERER BLOCK ---
 	case "three_of_a_kind":
 		// Mindestens 3 gleiche

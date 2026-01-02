@@ -9,7 +9,7 @@ type GameState struct {
 	RollCount               int               `json:"roll_count"`
 	Dice                    []Dice            `json:"dice"`
 	TimeoutRemainingSeconds int               `json:"timeout_remaining_seconds"`
-	TurnOrder               []string          `json:"turn_order"`
+	TurnOrder               []Player          `json:"turn_order"`
 	ScoreBoard              []ScoreBoardEntry `json:"score_board"`
 }
 
@@ -51,9 +51,9 @@ type Scores struct {
 	Total int `json:"total"`
 }
 
-type TurnOrderEntry struct {
-	UserID   string `json:"user_id" binding:"required"`
-	Username string `json:"username" binding:"required"`
+type Player struct {
+	PlayerID string `json:"player_id"`
+	Username string `json:"username"`
 }
 
 // ErrorResponse definiert die Struktur für detaillierte Fehler (403)

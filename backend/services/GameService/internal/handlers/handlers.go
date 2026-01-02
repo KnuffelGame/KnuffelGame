@@ -76,7 +76,7 @@ func (h *Handler) CreateGame(c *gin.Context) {
 			firstTurn := models.TurnDB{
 				ID:         uuid.New().String(),
 				GameID:     gameID,
-				UserID:     player,
+				UserID:     player.PlayerID,
 				RollCount:  0,
 				DiceValues: []int{0, 0, 0, 0, 0}, // Wichtig: Leeres Array, nicht nil
 				KeptDice:   []bool{false, false, false, false, false},
@@ -97,7 +97,7 @@ func (h *Handler) CreateGame(c *gin.Context) {
 				scorecard := models.ScorecardDB{
 					ID:          uuid.New().String(),
 					GameID:      gameID,
-					UserID:      player,
+					UserID:      player.PlayerID,
 					FieldName:   category,
 					Value:       0,   // Startwert
 					RoundFilled: nil, // WICHTIG: nil bedeutet "noch offen"
@@ -125,7 +125,7 @@ func (h *Handler) CreateGame(c *gin.Context) {
 	response := models.CreateGameResponse{
 		GameID:          gameID,
 		LobbyID:         req.LobbyID,
-		CurrentPlayerID: firstPlayer,
+		CurrentPlayerID: firstPlayer.PlayerID,
 		TurnOrder:       turnOrder, // Wir geben die Struktur zurück, Gin macht daraus JSON
 	}
 
@@ -147,10 +147,10 @@ func (h *Handler) PostRollDice(c *gin.Context) {
 
 	if err != nil {
 		switch err {
-		case services.ErrGameNotFound:
+		case models.ErrGameNotFound:
 			c.JSON(http.StatusNotFound, gin.H{"error": "Game not found"})
 
-		case services.ErrNotYourTurn:
+		case models.ErrNotYourTurn:
 			// OpenAPI: 403 Forbidden - Not current player
 			// In einer echten App würdest du hier den "current_player" Namen aus der DB holen
 			c.JSON(http.StatusForbidden, models.ErrorResponse{
@@ -161,7 +161,7 @@ func (h *Handler) PostRollDice(c *gin.Context) {
 				},
 			})
 
-		case services.ErrMaxRolls:
+		case models.ErrMaxRolls:
 			// OpenAPI: 403 Forbidden - Max rolls reached
 			c.JSON(http.StatusForbidden, models.ErrorResponse{
 				Error:   "forbidden",
@@ -171,7 +171,7 @@ func (h *Handler) PostRollDice(c *gin.Context) {
 				},
 			})
 
-		case services.ErrGameNotActive:
+		case models.ErrGameNotActive:
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Game is not running"})
 
 		default:

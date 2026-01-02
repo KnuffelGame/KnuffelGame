@@ -6,11 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/KnuffelGame/KnuffelGame/backend/services/GameService/internal/models"
 )
-
-var ErrGameNotFound = errors.New("game not found")
 
 // DBTX definiert die Methoden, die sql.DB und sql.Tx gemeinsam haben.
 type DBTX interface {
@@ -160,6 +159,11 @@ func (r *Repository) GetGameByID(ctx context.Context, gameID string) (*models.Ga
 		&g.EndedAt,
 	)
 	if err != nil {
+		if err == sql.ErrNoRows {
+			log.Printf("Kein Spiel mit ID %s gefunden", gameID)
+			return nil, models.ErrGameNotFound // Oder ein definierter "NotFound" Fehler
+		}
+		log.Printf("Datenbankfehler beim Scannen von ID %s: %v", gameID, err)
 		return nil, err
 	}
 

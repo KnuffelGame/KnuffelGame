@@ -4,7 +4,7 @@ type CreateGameResponse struct {
 	GameID          string   `json:"game_id"`
 	LobbyID         string   `json:"lobby_id"`
 	CurrentPlayerID string   `json:"current_player_id"`
-	TurnOrder       []string `json:"turn_order"`
+	TurnOrder       []Player `json:"turn_order"`
 }
 
 type RollDiceResponse struct {

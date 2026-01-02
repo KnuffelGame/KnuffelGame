@@ -7,7 +7,7 @@ type GameDB struct {
 	LobbyID     string     `json:"lobby_id"`
 	Status      string     `json:"status"`
 	CurrentTurn int        `json:"current_turn"`
-	TurnOrder   []string   `json:"turn_order"`
+	TurnOrder   []Player   `json:"turn_order"`
 	Round       int        `json:"round"`
 	StartedAt   time.Time  `json:"started_at"`
 	EndedAt     *time.Time `json:"ended_at"`
