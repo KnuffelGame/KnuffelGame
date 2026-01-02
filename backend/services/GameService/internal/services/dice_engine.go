@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log"
 	"math/rand"
@@ -17,7 +16,6 @@ var (
 	ErrNotYourTurn   = errors.New("not_your_turn")
 	ErrMaxRolls      = errors.New("max_rolls_reached")
 	ErrGameNotActive = errors.New("game_not_active")
-	ErrInternal      = errors.New("internal_error")
 )
 
 // GameService ist die "Klasse", die die Geschäftslogik kapselt.
@@ -45,44 +43,36 @@ func (s *GameService) RollDice(ctx context.Context, gameID string, userID string
 	}
 
 	log.Println("DEBUG: Service und Repo sind da. Starte DB-Abfrage...")
+	log.Println("gdgsg")
 
 	// 1. Spiel aus der echten DB laden
 	game, err := s.Repo.GetGameByID(ctx, gameID)
 	if err != nil {
-		// Fehlerbehandlung: Repository gibt ggf. spezifische Fehler zurück
+		log.Println(err)
 		return nil, err
 	}
 
 	// 2. Validierung: Spiel-Status
 	if game.Status != "active" {
+		log.Println("WARNING: Game is not active!")
 		return nil, ErrGameNotActive
 	}
+	log.Println("hallo")
 
 	// 3. Validierung: Ist der User dran?
 	// Da TurnOrder als JSONB in der DB liegt, müssen wir es parsen
-	var turnOrder []models.TurnOrderEntry
-	if err := json.Unmarshal(game.TurnOrder, &turnOrder); err != nil {
-		return nil, ErrInternal // Dateninkonsistenz in der DB
-	}
-
-	if len(turnOrder) == 0 {
-		return nil, ErrInternal
-	}
-
-	// Berechne, wer dran ist. Annahme: CurrentTurn ist 1-basiert (Runde 1, Zug 1...)
-	// (CurrentTurn - 1) % AnzahlSpieler ergibt den Index im Array
-	playerIndex := (game.CurrentTurn - 1) % len(turnOrder)
-	expectedPlayerID := turnOrder[playerIndex].UserID
-
-	if expectedPlayerID != userID {
-		return nil, ErrNotYourTurn
-	}
-
-	// 4. Den aktuellen Turn (Spielzug) aus der DB laden
-	currentTurn, err := s.Repo.GetCurrentTurn(ctx, gameID, userID)
+	err = s.validateTurn(game, userID)
 	if err != nil {
+		log.Println("WARNING: validateTurn failed: ", err)
 		return nil, err
 	}
+
+	currentTurn, err := s.Repo.GetCurrentTurn(ctx, gameID, userID)
+	if err != nil {
+		log.Println("ERROR: GetCurrentTurn failed: ", err)
+		return nil, err
+	}
+	log.Printf("DEBUG: currentTurn = %+v\n", currentTurn)
 
 	if currentTurn == nil {
 		// Initialisiere ein neues Turn-Objekt

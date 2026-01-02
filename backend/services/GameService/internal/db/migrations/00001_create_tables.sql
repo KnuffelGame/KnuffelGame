@@ -15,6 +15,7 @@ CREATE TYPE scorecard_field_enum AS ENUM (
     'fours',
     'fives',
     'sixes',
+    'bonus',
     'three_of_a_kind',
     'four_of_a_kind',
     'full_house',
@@ -67,7 +68,8 @@ CREATE TABLE IF NOT EXISTS turns (
 
     timeout BOOLEAN NOT NULL DEFAULT false,
     started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    ended_at TIMESTAMPTZ
+    ended_at TIMESTAMPTZ,
+    round INT NOT NULL DEFAULT 1
 );
 
 -- Index für die schnelle Suche nach Zügen eines Spiels

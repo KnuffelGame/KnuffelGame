@@ -113,6 +113,8 @@ func (s *Server) registerRoutes(gameHandler *handlers.Handler) {
 	// s.router.GET("/games/:game_id", gameHandler.GetGameState)
 	s.router.POST("/internal/create", gameHandler.CreateGame)
 	s.router.POST("/games/:game_id/roll", gameHandler.PostRollDice)
+	s.router.POST("/games/:game_id/toggle-dice", gameHandler.PostSelectDice)
+	s.router.POST("games/:game_id/select-field", gameHandler.PostSelectScoreField)
 }
 
 // healthCheckHandler ist ein einfacher Handler für den Health-Check.

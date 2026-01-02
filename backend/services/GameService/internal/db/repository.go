@@ -84,8 +84,8 @@ func (r *Repository) CreateGame(ctx context.Context, game *models.GameDB) error 
 }
 
 func (r *Repository) CreateTurn(ctx context.Context, m *models.TurnDB) error {
-	query := `INSERT INTO turns (id, game_id, user_id, roll_count, dice_values, kept_dice, timeout, started_at, ended_at)
-        	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+	query := `INSERT INTO turns (id, game_id, user_id, roll_count, dice_values, kept_dice, timeout, started_at, ended_at, round)
+        	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
 
 	// 1. DiceValues ([]int) zu JSON konvertieren
 	diceJSON, err := json.Marshal(m.DiceValues)
@@ -109,6 +109,7 @@ func (r *Repository) CreateTurn(ctx context.Context, m *models.TurnDB) error {
 		m.Timeout,
 		m.StartedAt,
 		m.EndedAt,
+		m.Round,
 	)
 
 	if err != nil {
@@ -138,19 +139,37 @@ func (r *Repository) CreateScorecard(ctx context.Context, m *models.ScorecardDB)
 	return nil
 }
 
-// GetGameByID nutzt jetzt r.db.QueryRowContext
 func (r *Repository) GetGameByID(ctx context.Context, gameID string) (*models.GameDB, error) {
 	query := `SELECT id, lobby_id, status, current_turn, turn_order, round, started_at, ended_at 
               FROM games WHERE id = $1`
 
-	// Hier wird QueryRowContext aufgerufen (funktioniert mit DB oder Tx)
 	row := r.db.QueryRowContext(ctx, query, gameID)
 
 	var g models.GameDB
-	err := row.Scan(&g.ID, &g.LobbyID, &g.Status, &g.CurrentTurn, &g.TurnOrder, &g.Round, &g.StartedAt, &g.EndedAt)
+	var turnOrderJSON []byte // 1. Temporäre Variable für die rohen JSON-Bytes
+
+	// 2. Scan: turnOrderJSON anstelle von &g.TurnOrder nutzen
+	err := row.Scan(
+		&g.ID,
+		&g.LobbyID,
+		&g.Status,
+		&g.CurrentTurn,
+		&turnOrderJSON, // Hier kommen die Bytes rein
+		&g.Round,
+		&g.StartedAt,
+		&g.EndedAt,
+	)
 	if err != nil {
-		return nil, err // caller prüft auf sql.ErrNoRows
+		return nil, err
 	}
+
+	// 3. Konvertierung: Bytes -> []string
+	if len(turnOrderJSON) > 0 {
+		if err := json.Unmarshal(turnOrderJSON, &g.TurnOrder); err != nil {
+			return nil, fmt.Errorf("fehler beim parsen von turn_order: %w", err)
+		}
+	}
+
 	return &g, nil
 }
 
@@ -229,4 +248,45 @@ func (r *Repository) GetCurrentTurn(ctx context.Context, gameID, userID string) 
 	}
 
 	return &t, nil
+}
+
+func (r *Repository) UpdateScorecard(ctx context.Context, s *models.ScorecardDB) error {
+	query := `UPDATE scorecards 
+			  SET value = $1, round_filled = $2 
+			  WHERE game_id = $3 AND user_id = $4 AND field_name = $5`
+
+	_, err := r.db.ExecContext(ctx, query, s.Value, s.RoundFilled, s.GameID, s.UserID, s.FieldName)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *Repository) UpdateGame(ctx context.Context, g *models.GameDB) error {
+	query := `UPDATE games 
+			  SET current_turn = $1, round = $2, status = $3, ended_at = $4 
+			  WHERE id = $5`
+
+	_, err := r.db.ExecContext(ctx, query, g.CurrentTurn, g.Round, g.Status, g.EndedAt, g.ID)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *Repository) ResetTurnAfterFinishedTurn(ctx context.Context, gameID, userID string, round int) error {
+	keptDice := []bool{false, false, false, false, false}
+	keptDiceJSON, err := json.Marshal(keptDice)
+	if err != nil {
+		return fmt.Errorf("failed to marshal kept_dice for reset: %w", err)
+	}
+
+	query := `UPDATE turns
+			  SET roll_count = 0, kept_dice = $1, round = $2
+			  WHERE game_id = $3 AND user_id = $4`
+
+	_, err = r.db.ExecContext(ctx, query, keptDiceJSON, round, gameID, userID)
+	return err
 }

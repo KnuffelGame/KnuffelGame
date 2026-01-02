@@ -1,8 +1,9 @@
 package handlers
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"log/slog"
 	"net/http"
 	"time"
@@ -28,34 +29,6 @@ func NewHandler(repo *db.Repository, logger *slog.Logger, diceEngine *services.G
 	}
 }
 
-//func (h *Handler) GetGameState(c *gin.Context) {
-//	gameID := c.Param("game_id")
-//
-//	if gameID == "" {
-//		h.logger.Warn("Missing game_id parameter")
-//		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing game ID."})
-//		return
-//	}
-//
-//	gameState, err := h.repo.GetGameStateByID(c.Request.Context(), gameID)
-//	if err != nil {
-//		// 4. Fehler behandeln
-//		if errors.Is(err, db.ErrGameNotFound) {
-//			// Spezifischer Fehler: 404 Not Found
-//			c.JSON(http.StatusNotFound, gin.H{"error": "Game not found"})
-//			return
-//		}
-//
-//		// Allgemeiner Fehler: 500 Internal Server Error
-//		h.logger.Error("Failed to get game state", "error", err, "game_id", gameID)
-//		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
-//		return
-//	}
-//
-//	// 5. Erfolg: 200 OK und GameState als JSON senden
-//	c.JSON(http.StatusOK, gameState)
-//}
-
 func (h *Handler) CreateGame(c *gin.Context) {
 	var req models.CreateGameRequest
 
@@ -68,16 +41,10 @@ func (h *Handler) CreateGame(c *gin.Context) {
 	gameID := uuid.New().String()
 	startTime := time.Now()
 	firstPlayer := req.TurnOrder[0]
-
-	turnOrderJSON, err := json.Marshal(req.TurnOrder)
-	if err != nil {
-		h.logger.Error("Failed to marshal turn order", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal Server Error"})
-		return
-	}
+	turnOrder := req.TurnOrder
 
 	categories := []string{
-		"ones", "twos", "threes", "fours", "fives", "sixes",
+		"ones", "twos", "threes", "fours", "fives", "sixes", "bonus",
 		"three_of_a_kind", "four_of_a_kind", "full_house",
 		"small_straight", "large_straight", "kniffel", "chance",
 	}
@@ -85,7 +52,7 @@ func (h *Handler) CreateGame(c *gin.Context) {
 	// Context für die DB-Operationen holen
 	ctx := c.Request.Context()
 
-	err = h.repo.WithTransaction(ctx, func(txRepo *db.Repository) error {
+	err := h.repo.WithTransaction(ctx, func(txRepo *db.Repository) error {
 
 		// A. Spiel anlegen
 		// Wir erstellen das GameDB Objekt.
@@ -95,7 +62,7 @@ func (h *Handler) CreateGame(c *gin.Context) {
 			LobbyID:     req.LobbyID,
 			Status:      "active",
 			CurrentTurn: 1,
-			TurnOrder:   turnOrderJSON, // Hier wird das JSON gespeichert
+			TurnOrder:   turnOrder, // Hier wird das JSON gespeichert
 			Round:       1,
 			StartedAt:   startTime,
 		}
@@ -105,20 +72,22 @@ func (h *Handler) CreateGame(c *gin.Context) {
 		}
 
 		// B. Ersten Turn anlegen
-		// Initialer Zustand: 0 Würfe, alle Würfel auf 0, nichts gehalten.
-		firstTurn := models.TurnDB{
-			ID:         uuid.New().String(),
-			GameID:     gameID,
-			UserID:     firstPlayer.UserID,
-			RollCount:  0,
-			DiceValues: []int{0, 0, 0, 0, 0}, // Wichtig: Leeres Array, nicht nil
-			KeptDice:   []bool{false, false, false, false, false},
-			Timeout:    false,
-			StartedAt:  startTime,
-		}
+		for _, player := range req.TurnOrder {
+			firstTurn := models.TurnDB{
+				ID:         uuid.New().String(),
+				GameID:     gameID,
+				UserID:     player,
+				RollCount:  0,
+				DiceValues: []int{0, 0, 0, 0, 0}, // Wichtig: Leeres Array, nicht nil
+				KeptDice:   []bool{false, false, false, false, false},
+				Timeout:    false,
+				StartedAt:  startTime,
+				Round:      1,
+			}
 
-		if err := txRepo.CreateTurn(ctx, &firstTurn); err != nil {
-			return fmt.Errorf("failed to create initial turn: %w", err)
+			if err := txRepo.CreateTurn(ctx, &firstTurn); err != nil {
+				return fmt.Errorf("failed to create initial turn: %w", err)
+			}
 		}
 
 		// C. Scorecards für ALLE Spieler anlegen
@@ -128,14 +97,14 @@ func (h *Handler) CreateGame(c *gin.Context) {
 				scorecard := models.ScorecardDB{
 					ID:          uuid.New().String(),
 					GameID:      gameID,
-					UserID:      player.UserID,
+					UserID:      player,
 					FieldName:   category,
 					Value:       0,   // Startwert
 					RoundFilled: nil, // WICHTIG: nil bedeutet "noch offen"
 				}
 
 				if err := txRepo.CreateScorecard(ctx, &scorecard); err != nil {
-					return fmt.Errorf("failed to create scorecard for user %s field %s: %w", player.UserID, category, err)
+					return err
 				}
 			}
 		}
@@ -156,8 +125,8 @@ func (h *Handler) CreateGame(c *gin.Context) {
 	response := models.CreateGameResponse{
 		GameID:          gameID,
 		LobbyID:         req.LobbyID,
-		CurrentPlayerID: firstPlayer.UserID,
-		TurnOrder:       req.TurnOrder, // Wir geben die Struktur zurück, Gin macht daraus JSON
+		CurrentPlayerID: firstPlayer,
+		TurnOrder:       turnOrder, // Wir geben die Struktur zurück, Gin macht daraus JSON
 	}
 
 	h.logger.Info("Game created successfully", "game_id", gameID, "lobby_id", req.LobbyID)
@@ -212,5 +181,69 @@ func (h *Handler) PostRollDice(c *gin.Context) {
 	}
 
 	// 200 OK
+	c.JSON(http.StatusOK, response)
+}
+
+func (h *Handler) PostSelectDice(c *gin.Context) {
+	gameID := c.Param("game_id")
+	userID := c.GetHeader("user_id")
+
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing User-Id header"})
+		return
+	}
+
+	var req models.ToggleDiceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		h.logger.Warn("Invalid request payload", "error", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload"})
+		return
+	}
+
+	response, err := h.diceEngine.ToggleDice(c, gameID, userID, req.DiceIndices)
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrGameNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "Game not found"})
+		case errors.Is(err, services.ErrNotYourTurn):
+			c.JSON(http.StatusForbidden, gin.H{"error": "It's not your turn"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+func (h *Handler) PostSelectScoreField(c *gin.Context) {
+	gameID := c.Param("game_id")
+	userID := c.GetHeader("user_id")
+
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing User-Id header"})
+		return
+	}
+
+	var req models.SelectScoreFieldRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		h.logger.Warn("Invalid request payload", "error", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload"})
+		return
+	}
+	log.Println("starting select score field()")
+	response, err := h.diceEngine.SelectScoreField(c, gameID, userID, req.FieldName)
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrGameNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "Game not found"})
+		case errors.Is(err, services.ErrNotYourTurn):
+			c.JSON(http.StatusForbidden, gin.H{"error": "It's not your turn"})
+		default:
+			c.JSON(http.StatusInternalServerError, err)
+		}
+		return
+	}
+
 	c.JSON(http.StatusOK, response)
 }
