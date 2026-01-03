@@ -203,9 +203,9 @@ func (h *Handler) PostSelectDice(c *gin.Context) {
 	response, err := h.diceEngine.ToggleDice(c, gameID, userID, req.DiceIndices)
 	if err != nil {
 		switch {
-		case errors.Is(err, services.ErrGameNotFound):
+		case errors.Is(err, models.ErrGameNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": "Game not found"})
-		case errors.Is(err, services.ErrNotYourTurn):
+		case errors.Is(err, models.ErrNotYourTurn):
 			c.JSON(http.StatusForbidden, gin.H{"error": "It's not your turn"})
 		default:
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
@@ -235,10 +235,12 @@ func (h *Handler) PostSelectScoreField(c *gin.Context) {
 	response, err := h.diceEngine.SelectScoreField(c, gameID, userID, req.FieldName)
 	if err != nil {
 		switch {
-		case errors.Is(err, services.ErrGameNotFound):
+		case errors.Is(err, models.ErrGameNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": "Game not found"})
-		case errors.Is(err, services.ErrNotYourTurn):
+		case errors.Is(err, models.ErrNotYourTurn):
 			c.JSON(http.StatusForbidden, gin.H{"error": "It's not your turn"})
+		case errors.Is(err, models.ErrFieldAlreadySelected):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Field already selected"})
 		default:
 			c.JSON(http.StatusInternalServerError, err)
 		}
@@ -254,7 +256,7 @@ func (h *Handler) GetGameState(c *gin.Context) {
 	response, err := h.diceEngine.BuildGameState(c, gameID)
 	if err != nil {
 		switch {
-		case errors.Is(err, services.ErrGameNotFound):
+		case errors.Is(err, models.ErrGameNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": "Game not found"})
 		default:
 			c.JSON(http.StatusInternalServerError, err)

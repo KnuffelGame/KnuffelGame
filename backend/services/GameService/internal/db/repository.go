@@ -462,3 +462,17 @@ func (r *Repository) GetUsernameByID(ctx context.Context, gameID string, userID 
 	}
 	return "", err
 }
+
+func (r *Repository) CheckIfFieldIsAvailable(ctx context.Context, gameID string, userID string, fieldName string) (bool, error) {
+	query := `SELECT * FROM scorecards WHERE game_id = $1 AND user_id = $2 AND field_name = $3`
+	row := r.db.QueryRowContext(ctx, query, gameID, userID, fieldName)
+	var scorecard models.ScorecardDB
+	err := row.Scan(&scorecard.ID, &scorecard.GameID, &scorecard.UserID, &scorecard.FieldName, &scorecard.Value, &scorecard.RoundFilled)
+	if err != nil {
+		return false, err
+	}
+	if scorecard.RoundFilled != nil {
+		return false, models.ErrFieldAlreadySelected
+	}
+	return true, nil
+}

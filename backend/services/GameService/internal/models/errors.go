@@ -10,4 +10,5 @@ var (
 	ErrInternal              = errors.New("internal_error")
 	ErrInvalidRollcount      = errors.New("invalid_dice_roll_count")
 	ErrBonusCannotBeSelected = errors.New("bonus_cannot_be_selected")
+	ErrFieldAlreadySelected  = errors.New("field_already_selected")
 )

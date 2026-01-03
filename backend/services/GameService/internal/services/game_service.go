@@ -13,7 +13,7 @@ func (s *GameService) ToggleDice(ctx context.Context, gameID, userID string, ind
 	// A. Spiel laden
 	game, err := s.Repo.GetGameByID(ctx, gameID)
 	if err != nil {
-		return nil, ErrGameNotFound
+		return nil, models.ErrGameNotFound
 	}
 
 	// B. VALIDIERUNG: Ist der User dran?
@@ -81,7 +81,7 @@ func (s *GameService) SelectScoreField(ctx context.Context, gameID, userID, fiel
 	game, err := s.Repo.GetGameByID(ctx, gameID)
 	if err != nil {
 		log.Println("WARNING: GetGameByID failed: ", err)
-		return nil, ErrGameNotFound
+		return nil, models.ErrGameNotFound
 	}
 
 	// B. VALIDIERUNG: Ist der User dran?
@@ -102,6 +102,18 @@ func (s *GameService) SelectScoreField(ctx context.Context, gameID, userID, fiel
 
 	if currentTurn.RollCount == 0 {
 		return nil, models.ErrInvalidRollcount // ErrInvalidRollCount
+	}
+
+	// Validierung ist das Feld schon belegt
+	var fieldAvailable bool
+	fieldAvailable, err = s.Repo.CheckIfFieldIsAvailable(ctx, gameID, userID, fieldName)
+	if err != nil {
+		log.Println("WARNING: CheckIfFieldIsAvailable failed: ", err)
+		return nil, err
+	}
+
+	if !fieldAvailable {
+		return nil, models.ErrFieldAlreadySelected
 	}
 
 	score, err := CalculateFieldScore(currentTurn.DiceValues, fieldName)

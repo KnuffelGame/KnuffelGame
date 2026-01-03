@@ -23,7 +23,7 @@ func (s *GameService) validateTurn(game *models.GameDB, userID string) error {
 
 	if expectedPlayerID.PlayerID != userID {
 		log.Printf("DEBUG: Not your turn. expectedPlayerID=%s, userID=%s\n\n", expectedPlayerID, userID)
-		return ErrNotYourTurn
+		return models.ErrNotYourTurn
 	}
 
 	return nil

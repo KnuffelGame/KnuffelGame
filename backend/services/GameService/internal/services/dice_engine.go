@@ -11,13 +11,6 @@ import (
 	"github.com/KnuffelGame/KnuffelGame/backend/services/GameService/internal/models"
 )
 
-var (
-	ErrGameNotFound  = errors.New("game_not_found")
-	ErrNotYourTurn   = errors.New("not_your_turn")
-	ErrMaxRolls      = errors.New("max_rolls_reached")
-	ErrGameNotActive = errors.New("game_not_active")
-)
-
 // GameService ist die "Klasse", die die Geschäftslogik kapselt.
 type GameService struct {
 	Repo *db.Repository
@@ -55,7 +48,7 @@ func (s *GameService) RollDice(ctx context.Context, gameID string, userID string
 	// 2. Validierung: Spiel-Status
 	if game.Status != "active" {
 		log.Println("WARNING: Game is not active!")
-		return nil, ErrGameNotActive
+		return nil, models.ErrGameNotActive
 	}
 	log.Println("hallo")
 
@@ -97,7 +90,7 @@ func (s *GameService) RollDice(ctx context.Context, gameID string, userID string
 
 	// 5. Validierung: Maximale Würfe
 	if currentTurn.RollCount >= 3 {
-		return nil, ErrMaxRolls
+		return nil, models.ErrMaxRolls
 	}
 
 	// --- LOGIK: WÜRFELN ---
