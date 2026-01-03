@@ -294,3 +294,171 @@ func (r *Repository) ResetTurnAfterFinishedTurn(ctx context.Context, gameID, use
 	_, err = r.db.ExecContext(ctx, query, keptDiceJSON, round, gameID, userID)
 	return err
 }
+
+func (r *Repository) GetScoreBoard(ctx context.Context, gameID string) ([]models.ScoreBoard, error) {
+	// 1. Alle Score-Einträge für dieses Spiel laden
+	query := `
+        SELECT user_id, field_name, value 
+        FROM scorecards 
+        WHERE game_id = $1`
+
+	rows, err := r.db.QueryContext(ctx, query, gameID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// Map, um Scores pro User zu sammeln (UserID -> PlayerScore)
+	scoreMap := make(map[string]*models.ScoreBoard)
+
+	for rows.Next() {
+		var userID string
+		var fieldName string
+		var value int
+
+		if err := rows.Scan(&userID, &fieldName, &value); err != nil {
+			return nil, err
+		}
+
+		username, err := r.GetUsernameByID(ctx, gameID, userID)
+		if err != nil {
+			return nil, err
+		}
+
+		// Falls der Spieler noch nicht in der Map ist, neu anlegen
+		if _, ok := scoreMap[userID]; !ok {
+			scoreMap[userID] = &models.ScoreBoard{
+				UserID:   userID,
+				Username: username,
+				Scores:   models.Scores{},
+			}
+		}
+
+		// Hilfsvariable für den Pointer-Wert
+		valPtr := new(int)
+		*valPtr = value
+
+		// Den Wert dem richtigen Feld im Struct zuordnen
+		AssignScoreField(&scoreMap[userID].Scores, fieldName, valPtr)
+	}
+
+	// Map in eine Slice umwandeln
+	var scoreBoard []models.ScoreBoard
+	for _, ps := range scoreMap {
+		// Hier berechnen wir die Summen, bevor wir es hinzufügen
+		CalculateSums(&ps.Scores)
+		scoreBoard = append(scoreBoard, *ps)
+	}
+
+	return scoreBoard, nil
+}
+
+func CalculateSums(s *models.Scores) {
+	upper := 0
+	if s.Ones != nil {
+		upper += *s.Ones
+	}
+	if s.Twos != nil {
+		upper += *s.Twos
+	}
+	if s.Threes != nil {
+		upper += *s.Threes
+	}
+	if s.Fours != nil {
+		upper += *s.Fours
+	}
+	if s.Fives != nil {
+		upper += *s.Fives
+	}
+	if s.Sixes != nil {
+		upper += *s.Sixes
+	}
+
+	s.UpperSum = upper
+
+	if upper >= 63 {
+		bonus := 35
+		s.Bonus = &bonus
+		s.Total += bonus
+	}
+
+	lower := 0
+	if s.ThreeOfAKind != nil {
+		lower += *s.ThreeOfAKind
+	}
+	if s.FourOfAKind != nil {
+		lower += *s.FourOfAKind
+	}
+	if s.FullHouse != nil {
+		lower += *s.FullHouse
+	}
+	if s.SmallStraight != nil {
+		lower += *s.SmallStraight
+	}
+	if s.LargeStraight != nil {
+		lower += *s.LargeStraight
+	}
+	if s.Kniffel != nil {
+		lower += *s.Kniffel
+	}
+	if s.Chance != nil {
+		lower += *s.Chance
+	}
+
+	s.LowerSum = lower
+	s.Total = upper + lower
+}
+
+func AssignScoreField(s *models.Scores, fieldName string, value *int) {
+	switch fieldName {
+	case "ones":
+		s.Ones = value
+	case "twos":
+		s.Twos = value
+	case "threes":
+		s.Threes = value
+	case "fours":
+		s.Fours = value
+	case "fives":
+		s.Fives = value
+	case "sixes":
+		s.Sixes = value
+	case "three_of_a_kind":
+		s.ThreeOfAKind = value
+	case "four_of_a_kind":
+		s.FourOfAKind = value
+	case "full_house":
+		s.FullHouse = value
+	case "small_straight":
+		s.SmallStraight = value
+	case "large_straight":
+		s.LargeStraight = value
+	case "kniffel":
+		s.Kniffel = value
+	case "chance":
+		s.Chance = value
+	}
+}
+
+func (r *Repository) GetUsernameByID(ctx context.Context, gameID string, userID string) (string, error) {
+	query := `SELECT turn_order FROM games WHERE id = $1`
+
+	var turnOrderJSON []byte
+	err := r.db.QueryRowContext(ctx, query, gameID).Scan(&turnOrderJSON)
+
+	if err != nil {
+		return "", err
+	}
+
+	var turnOrder []models.Player
+	if err := json.Unmarshal(turnOrderJSON, &turnOrder); err != nil {
+		return "", err
+	}
+
+	for _, player := range turnOrder {
+		if player.PlayerID == userID {
+			return player.Username, nil
+		}
+	}
+	return "", err
+}

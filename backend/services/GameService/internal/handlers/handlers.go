@@ -231,7 +231,7 @@ func (h *Handler) PostSelectScoreField(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload"})
 		return
 	}
-	log.Println("starting select score field()")
+	log.Println("starting select score field")
 	response, err := h.diceEngine.SelectScoreField(c, gameID, userID, req.FieldName)
 	if err != nil {
 		switch {
@@ -239,6 +239,23 @@ func (h *Handler) PostSelectScoreField(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Game not found"})
 		case errors.Is(err, services.ErrNotYourTurn):
 			c.JSON(http.StatusForbidden, gin.H{"error": "It's not your turn"})
+		default:
+			c.JSON(http.StatusInternalServerError, err)
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+func (h *Handler) GetGameState(c *gin.Context) {
+	gameID := c.Param("game_id")
+
+	response, err := h.diceEngine.BuildGameState(c, gameID)
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrGameNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "Game not found"})
 		default:
 			c.JSON(http.StatusInternalServerError, err)
 		}

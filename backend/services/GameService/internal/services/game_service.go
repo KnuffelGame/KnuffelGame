@@ -158,6 +158,7 @@ func (s *GameService) SetNextPlayer(ctx context.Context, game *models.GameDB) er
 		game.Status = "FINISHED"
 		now := time.Now()
 		game.EndedAt = &now
+		// TODO add method to calculate result
 	}
 
 	if err := s.Repo.UpdateGame(ctx, game); err != nil {
@@ -165,4 +166,50 @@ func (s *GameService) SetNextPlayer(ctx context.Context, game *models.GameDB) er
 	}
 
 	return nil
+}
+
+func (s *GameService) FinishGamed(ctx context.Context, gameID string) error {
+	game, err := s.Repo.GetGameByID(ctx, gameID)
+	if err != nil {
+		return err
+	}
+
+	game.Status = "FINISHED"
+
+	if err := s.Repo.UpdateGame(ctx, game); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *GameService) BuildGameState(ctx context.Context, gameID string) (*models.GameState, error) {
+	game, err := s.Repo.GetGameByID(ctx, gameID)
+	if err != nil {
+		return nil, models.ErrGameNotFound
+	}
+
+	currentTurn, err := s.Repo.GetCurrentTurn(ctx, gameID, game.TurnOrder[(game.CurrentTurn-1)%len(game.TurnOrder)].PlayerID)
+	if err != nil || currentTurn == nil {
+		log.Println("ERROR: GetCurrentTurn failed: ", err)
+		return nil, err
+	}
+
+	var Scoreboards, _ = s.Repo.GetScoreBoard(ctx, gameID)
+
+	var gameState = models.GameState{
+		GameID:                gameID,
+		LobbyID:               game.LobbyID,
+		Status:                game.Status,
+		CurrentPlayerID:       game.TurnOrder[(game.CurrentTurn-1)%len(game.TurnOrder)].PlayerID,
+		CurrentPlayerUsername: game.TurnOrder[(game.CurrentTurn-1)%len(game.TurnOrder)].Username,
+		RollCount:             currentTurn.RollCount,
+		Dice:                  s.BuildDices(currentTurn.DiceValues, currentTurn.KeptDice),
+		TurnOrder:             game.TurnOrder,
+		ScoreBoard:            Scoreboards,
+		Round:                 game.Round,
+	}
+
+	return &gameState, nil
+
 }

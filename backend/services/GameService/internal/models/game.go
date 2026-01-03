@@ -1,16 +1,25 @@
 package models
 
+// Game represents the entire game, including its state and logic.
+type Game struct {
+	State GameState `json:"state"`
+	// db connection would be here, but we'll pass it into methods for now.
+}
+
+// GameState represents the current state of the game.
+// This struct is serialized to JSON and sent to the player frontends.
 type GameState struct {
-	GameID                  string            `json:"game_id"`
-	LobbyID                 string            `json:"lobby_id"`
-	Status                  string            `json:"status"`
-	CurrentPlayerID         string            `json:"current_player_id"`
-	CurrentPlayerUsername   string            `json:"current_player_username"`
-	RollCount               int               `json:"roll_count"`
-	Dice                    []Dice            `json:"dice"`
-	TimeoutRemainingSeconds int               `json:"timeout_remaining_seconds"`
-	TurnOrder               []Player          `json:"turn_order"`
-	ScoreBoard              []ScoreBoardEntry `json:"score_board"`
+	GameID                  string       `json:"game_id"`
+	LobbyID                 string       `json:"lobby_id"`
+	Status                  string       `json:"status"`
+	CurrentPlayerID         string       `json:"current_player_id"`
+	CurrentPlayerUsername   string       `json:"current_player_username"`
+	RollCount               int          `json:"roll_count"`
+	Dice                    []Dice       `json:"dice"`
+	TimeoutRemainingSeconds int          `json:"timeout_remaining_seconds"`
+	TurnOrder               []Player     `json:"turn_order"`
+	ScoreBoard              []ScoreBoard `json:"score_board"`
+	Round                   int          `json:"round"`
 }
 
 // Dice repräsentiert einen einzelnen Würfel im Würfelbecher.
@@ -19,8 +28,8 @@ type Dice struct {
 	Locked bool `json:"locked"`
 }
 
-// ScoreBoardEntry repräsentiert die Punktetabelle eines einzelnen Spielers.
-type ScoreBoardEntry struct {
+// ScoreBoard repräsentiert die Punktetabelle eines einzelnen Spielers.
+type ScoreBoard struct {
 	UserID   string `json:"user_id"`
 	Username string `json:"username"`
 	Scores   Scores `json:"scores"`
