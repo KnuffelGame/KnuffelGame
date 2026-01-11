@@ -172,15 +172,15 @@ apiClient.interceptors.response.use(
     // 401 Unauthorized Handling
     if (error.response?.status === 401) {
       showToastError("Sitzung abgelaufen. Du wirst zur Startseite weitergeleitet.")
-      window.location.href = "/" 
-      return Promise.reject(error) 
+      window.location.href = "/"
+      return Promise.reject(error)
     }
 
     // General Error Handling
     const errorMessage = error.response?.data?.message || error.message || "Unbekannter API-Fehler."
     showToastError(`Fehler (${error.response?.status || 'Netzwerk'}): ${errorMessage}`)
-    
-    return Promise.reject(error) 
+
+    return Promise.reject(error)
   },
 )
 
@@ -192,20 +192,37 @@ apiClient.interceptors.response.use(
 // Simuliert den Zustand des Spiels, um Aktionen zu speichern
 let currentMockGameState: any = {
   gameId: "MOCK-GAME-123",
-  turnPlayerId: "mock-user-456",
-  currentPlayerName: "MaxMustermann",
-  dice: [1, 2, 3, 4, 5],
-  kept: [false, false, false, false, false],
-  rollsLeft: 3,
-  scoreCard: {
-    Ones: null, Twos: null, Threes: null, Fours: null, Fives: null, Sixes: null,
-    ThreeOfAKind: null, FourOfAKind: null, FullHouse: null, SmallStraight: null, LargeStraight: null, Kniffel: null, Chance: null
-  },
-  players: [
-    { id: "mock-user-456", username: "MaxMustermann", score: 0 },
-    { id: "player2", username: "Anna", score: 0 },
+  currentPlayerId: "mock-user-456", // Adjusted property name to match GamePage.tsx
+  currentPlayerName: "SarahSpielleiter",
+  dice: [
+    { value: 1, kept: false },
+    { value: 2, kept: false },
+    { value: 3, kept: false },
+    { value: 4, kept: false },
+    { value: 5, kept: false },
   ],
-  status: "ROLLING"
+  rollsLeft: 3,
+  scores: [
+    { name: "ones", displayName: "Einser", score: 9, available: false },
+    { name: "twos", displayName: "Zweier", score: null, available: true },
+    { name: "threes", displayName: "Dreier", score: 15, available: false },
+    { name: "fours", displayName: "Vierer", score: null, available: true },
+    { name: "fives", displayName: "Fünfer", score: 20, available: false },
+    { name: "sixes", displayName: "Sechser", score: null, available: true },
+    { name: "three_of_a_kind", displayName: "Dreierpasch", score: null, available: true },
+    { name: "four_of_a_kind", displayName: "Viererpasch", score: null, available: true },
+    { name: "full_house", displayName: "Full House", score: 25, available: false },
+    { name: "small_straight", displayName: "Kleine Straße", score: null, available: true },
+    { name: "large_straight", displayName: "Große Straße", score: null, available: true },
+    { name: "kniffel", displayName: "Kniffel", score: null, available: true },
+    { name: "chance", displayName: "Chance", score: null, available: true },
+  ],
+  players: [
+    { id: "mock-user-456", username: "SarahSpielleiter", score: 0 },
+    { id: "player2", username: "PeterPlayer", score: 0 },
+  ],
+  status: "ROLLING",
+  gameOver: false
 }
 
 // =========================================================================
@@ -220,7 +237,7 @@ export const createGuest = async (username: string) => {
 export const createLobby = async () => {
   await new Promise(resolve => setTimeout(resolve, 500))
   return {
-    lobbyId: "A1B2C3", 
+    lobbyId: "A1B2C3",
     joinCode: "A1B2"
   }
 }
@@ -228,14 +245,14 @@ export const createLobby = async () => {
 export const joinLobby = async (code: string) => {
   await new Promise(resolve => setTimeout(resolve, 500))
   if (code.toUpperCase() === "KNUX") {
-      return {
-        lobbyId: "KNUX01", 
-        joinCode: "KNUX"
-      }
+    return {
+      lobbyId: "KNUX01",
+      joinCode: "KNUX"
+    }
   } else {
-      return Promise.reject({
-          response: { status: 404, data: { message: "Lobby-Code ungültig oder nicht gefunden." } } 
-      })
+    return Promise.reject({
+      response: { status: 404, data: { message: "Lobby-Code ungültig oder nicht gefunden." } }
+    })
   }
 }
 
@@ -245,15 +262,15 @@ export const getLobby = async (lobbyId: string) => {
     return {
       lobbyId: lobbyId,
       joinCode: lobbyId === "A1B2C3" ? "A1B2" : "KNUX",
-      leaderId: "mock-user-456", 
+      leaderId: "mock-user-456",
       players: [
-        { id: "mock-user-456", username: "MaxMustermann", isLeader: true },
-        { id: "player2", username: "Anna", isLeader: false },
+        { id: "mock-user-456", username: "SarahSpielleiter", isLeader: true },
+        { id: "player2", username: "PeterPlayer", isLeader: false },
       ],
     }
   } else {
     return Promise.reject({
-        response: { status: 404, data: { message: "Lobby existiert nicht." } } 
+      response: { status: 404, data: { message: "Lobby existiert nicht." } }
     })
   }
 }
@@ -277,17 +294,20 @@ export const kickPlayer = async (lobbyId: string, playerId: string) => {
 /**
  * Simuliert das Würfeln.
  */
+/**
+ * Simuliert das Würfeln.
+ */
 export const rollDice = async (gameId: string) => {
   if (currentMockGameState.rollsLeft <= 0) {
     return Promise.reject({ response: { status: 400, data: { message: "Keine Würfelversuche mehr übrig." } } })
   }
 
   // Würfelt nur die Würfel, die NICHT kept sind.
-  currentMockGameState.dice = currentMockGameState.dice.map((die: number, index: number) => {
-    if (currentMockGameState.kept[index]) {
+  currentMockGameState.dice = currentMockGameState.dice.map((die: { value: number; kept: boolean }) => {
+    if (die.kept) {
       return die // Behaltener Würfel
     }
-    return Math.floor(Math.random() * 6) + 1 // Neu würfeln (1-6)
+    return { ...die, value: Math.floor(Math.random() * 6) + 1 } // Neu würfeln (1-6)
   })
 
   currentMockGameState.rollsLeft--
@@ -300,8 +320,8 @@ export const rollDice = async (gameId: string) => {
  * Simuliert das Behalten oder Freigeben eines Würfels.
  */
 export const keepDice = async (gameId: string, diceIndex: number, keep: boolean) => {
-  if (diceIndex >= 0 && diceIndex < 5) {
-    currentMockGameState.kept[diceIndex] = keep
+  if (diceIndex >= 0 && diceIndex < currentMockGameState.dice.length) {
+    currentMockGameState.dice[diceIndex].kept = keep
   }
   await new Promise(resolve => setTimeout(resolve, 100))
   return currentMockGameState
@@ -311,22 +331,82 @@ export const keepDice = async (gameId: string, diceIndex: number, keep: boolean)
  * Simuliert das Auswählen eines Wertungsfelds.
  */
 export const selectField = async (gameId: string, fieldName: string) => {
-  if (currentMockGameState.rollsLeft === 3) {
-      return Promise.reject({ response: { status: 400, data: { message: "Du musst zuerst würfeln!" } } })
-  }
-  if (currentMockGameState.scoreCard[fieldName] !== null) {
-      return Promise.reject({ response: { status: 400, data: { message: "Feld bereits belegt." } } })
-  }
-  
-  // MOCK: Trage einen Dummy-Score ein und beende den Zug
-  currentMockGameState.scoreCard[fieldName] = 20
-  currentMockGameState.rollsLeft = 3
-  currentMockGameState.kept = [false, false, false, false, false]
-  currentMockGameState.status = "NEXT_TURN"
+  console.log(`MOCK: selectField aufgerufen mit ${fieldName}`)
 
-  console.log(`MOCK: Feld ${fieldName} ausgewählt. Zug beendet.`)
+  // Debug-Modus für Spielende (Task 7.3 Debugging)
+  if (fieldName === "debug_game_over") {
+    currentMockGameState = {
+      ...currentMockGameState,
+      gameOver: true,
+      winner: currentMockGameState.players[0]
+    }
+    console.log("MOCK: Debug Game Over triggered")
+    return { ...currentMockGameState }
+  }
+
+  if (currentMockGameState.rollsLeft === 3) {
+    return Promise.reject({ response: { status: 400, data: { message: "Du musst zuerst würfeln!" } } })
+  }
+
+  const fieldIndex = currentMockGameState.scores.findIndex((s: any) => s.name === fieldName)
+  if (fieldIndex === -1) {
+    console.error(`MOCK: Feld nicht gefunden: ${fieldName}`)
+    return Promise.reject({ response: { status: 404, data: { message: `Feld nicht gefunden: ${fieldName}` } } })
+  }
+
+  if (currentMockGameState.scores[fieldIndex].score !== null) {
+    return Promise.reject({ response: { status: 400, data: { message: "Feld bereits belegt." } } })
+  }
+
+  // MOCK: Berechne einen Score
+  let calculatedScore = 0
+  const values = currentMockGameState.dice.map((d: any) => d.value)
+
+  if (["ones", "twos", "threes", "fours", "fives", "sixes"].includes(fieldName)) {
+    const val = ["ones", "twos", "threes", "fours", "fives", "sixes"].indexOf(fieldName) + 1
+    calculatedScore = values
+      .filter((v: number) => v === val)
+      .reduce((sum: number, v: number) => sum + v, 0)
+  } else {
+    // Einfache Mocks für Spezialfelder
+    switch (fieldName) {
+      case "full_house": calculatedScore = 25; break
+      case "small_straight": calculatedScore = 30; break
+      case "large_straight": calculatedScore = 40; break
+      case "kniffel": calculatedScore = 50; break
+      default: calculatedScore = values.reduce((s: number, v: number) => s + v, 0)
+    }
+  }
+
+  // Update scores array with a new reference for proper React update
+  const updatedScores = [...currentMockGameState.scores]
+  updatedScores[fieldIndex] = {
+    ...updatedScores[fieldIndex],
+    score: calculatedScore,
+    available: false
+  }
+
+  currentMockGameState = {
+    ...currentMockGameState,
+    scores: updatedScores,
+    rollsLeft: 3,
+    dice: currentMockGameState.dice.map((d: any) => ({ ...d, kept: false })),
+    status: "NEXT_TURN"
+  }
+
+  // Check game over
+  if (currentMockGameState.scores.every((s: any) => s.score !== null)) {
+    currentMockGameState = {
+      ...currentMockGameState,
+      gameOver: true,
+      winner: currentMockGameState.players[0]
+    }
+  }
+
+  console.log(`MOCK: Feld ${fieldName} ausgewählt. Score: ${calculatedScore}.`)
   await new Promise(resolve => setTimeout(resolve, 500))
-  return currentMockGameState
+  // Return a fresh clone to ensure React detects the change
+  return { ...currentMockGameState }
 }
 
 /**

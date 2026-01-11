@@ -62,9 +62,9 @@ const Dice: React.FC<DiceProps> = ({ value, kept, onClick, disabled = false, rol
       disabled={disabled || rolling}
       className={`
         relative w-20 h-20 transition-all duration-300 transform
-        ${rolling ? "animate-spin" : ""}
+        ${rolling ? "animate-dice-roll" : ""}
         ${kept ? "scale-110 shadow-2xl" : "hover:scale-105 shadow-lg"}
-        ${disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:shadow-xl"}
+        ${disabled && !kept ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:shadow-xl"}
         ${kept ? "ring-4 ring-yellow-400" : ""}
       `}
     >
